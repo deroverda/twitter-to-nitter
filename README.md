@@ -19,7 +19,7 @@ tries a Nitter instance
       ↓
 is it rate-limited / broken / a bad HTTP status?
       ↓ yes                          ↓ no
-try the next instance          done — stay here
+try the next instance          done - stay here
 ```
 
 - Preserves the original path, query string, and hash
@@ -65,12 +65,12 @@ This is a privately signed "unlisted" build made via [`web-ext sign`](https://ex
 
 Most Twitter/X redirector extensions request broad access (`<all_urls>`, every website) even though they only ever touch two domains. This extension requests only what it actually needs:
 
-- `webNavigation` / `tabs` — to detect and redirect X/Twitter navigation
-- `webRequest` — to check the HTTP status of the Nitter page it lands on
-- `storage` — to remember the last working instance
-- Host access to each configured Nitter instance only — needed to inspect the page content for rate-limit/empty-result detection
+- `webNavigation` / `tabs` - to detect and redirect X/Twitter navigation
+- `webRequest` - to check the HTTP status of the Nitter page it lands on
+- `storage` - to remember the last working instance
+- Host access to each configured Nitter instance only - needed to inspect the page content for rate-limit/empty-result detection
 
-No host permission for `x.com`/`twitter.com` at all — redirecting away from a page doesn't require it. No `<all_urls>`. No access to any site you're not already choosing to visit.
+No host permission for `x.com`/`twitter.com` at all - redirecting away from a page doesn't require it. No `<all_urls>`. No access to any site you're not already choosing to visit.
 
 ## Privacy
 
