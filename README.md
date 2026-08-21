@@ -41,7 +41,9 @@ Configured in `background.js`:
 - nitter.tiekoetter.com
 - nitter.catsarch.com
 
-Public Nitter instances go offline or change behavior over time. If one stops working, remove it from the `NITTER_INSTANCES` list in `background.js` and the matching host entry in `manifest.json`.
+Public Nitter instances go offline or change behavior over time. If one stops working, check the [releases page](https://github.com/deroverda/twitter-to-nitter/releases/latest) for an updated build, or maintain your own fork.
+
+If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entry in `manifest.json` only takes effect for regular users after you bump the version, re-sign with `web-ext sign --channel=unlisted`, and publish a new `.xpi`. Editing the files directly only applies immediately if you're running the extension unpacked via `about:debugging` → "Load Temporary Add-on".
 
 ## Install
 
