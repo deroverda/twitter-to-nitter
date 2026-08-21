@@ -6,7 +6,6 @@ const NITTER_INSTANCES = [
     "https://lightbrd.com",
     "https://nitter.space",
     "https://nitter.tiekoetter.com",
-    "https://nuku.trabun.org",
     "https://nitter.catsarch.com"
 ];
 
@@ -247,10 +246,10 @@ async function inspectNitterPage(
                                 ? document.body.innerText
                                 : "",
 
-                            searchResults:
-                                document.querySelectorAll(
-                                    ".tweet-content.media-body"
-                                ).length
+                            hasNoItems:
+                                document.querySelector(
+                                    ".timeline-none"
+                                ) !== null
                         })
                     `
                 }
@@ -261,8 +260,8 @@ async function inspectNitterPage(
         const text =
             page.text || "";
 
-        const searchResults =
-            page.searchResults || 0;
+        const hasNoItems =
+            page.hasNoItems || false;
 
 
         // ----------------------------------------------------
@@ -290,28 +289,21 @@ async function inspectNitterPage(
 
 
         // ----------------------------------------------------
-        // Search validation
+        // Empty timeline (profile, search, hashtag, etc.)
         // ----------------------------------------------------
 
-        if (url.pathname === "/search") {
-
-            if (searchResults === 0) {
-
-                console.log(
-                    `[Twitter → Nitter] ${url.origin} returned an empty search.`
-                );
-
-                tryNextInstance(
-                    tabId,
-                    redirect
-                );
-
-                return;
-            }
+        if (hasNoItems) {
 
             console.log(
-                `[Twitter → Nitter] Search working on ${url.origin} (${searchResults} results).`
+                `[Twitter → Nitter] ${url.origin} returned an empty timeline.`
             );
+
+            tryNextInstance(
+                tabId,
+                redirect
+            );
+
+            return;
         }
 
 
@@ -339,9 +331,7 @@ async function inspectNitterPage(
             error
         );
 
-        // Don't create an infinite redirect loop
-        // if Firefox refuses script injection.
-        pendingRedirects.delete(tabId);
+        tryNextInstance(tabId, redirect);
     }
 }
 

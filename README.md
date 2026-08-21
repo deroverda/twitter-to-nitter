@@ -39,7 +39,6 @@ Configured in `background.js`:
 - lightbrd.com
 - nitter.space
 - nitter.tiekoetter.com
-- nuku.trabun.org
 - nitter.catsarch.com
 
 Public Nitter instances go offline or change behavior over time. If one stops working, remove it from the `NITTER_INSTANCES` list in `background.js` and the matching host entry in `manifest.json`.
