@@ -12,6 +12,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Check instances
         id: check
         run: |
@@ -36,7 +38,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           BODY="The following instances failed their health check:\n\n$(cat down.txt)\n\nUpdate NITTER_INSTANCES in background.js if any of these are permanently dead."
-          EXISTING=$(gh issue list --search "Nitter instance check failing in:title" --state open --json number --jq '.[0].number')
+          EXISTING=$(gh issue list --search "Nitter instance check failing in:title" --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$(echo -e "$BODY")"
           else
