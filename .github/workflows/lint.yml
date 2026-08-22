@@ -29,13 +29,14 @@ jobs:
 
           cat lint-output.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ $EXIT_CODE -eq 0 ]; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "✅ No issues found" >> "$GITHUB_STEP_SUMMARY"
+          if grep -q "errors  *[1-9]" lint-output.txt; then
+            echo "❌ Lint found errors" >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q "warnings  *[1-9]" lint-output.txt; then
+            echo "⚠️ Lint passed with warnings" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "❌ Lint failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ No issues found" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           cat lint-output.txt
