@@ -16,6 +16,10 @@ const TWITTER_HOSTS = new Set([
     "www.x.com"
 ]);
 
+const UNSUPPORTED_PREFIXES = [
+    "/i/"
+];
+
 const FAILURE_MESSAGES = [
     "Instance has been rate limited",
     "Tweet not found"
@@ -66,7 +70,10 @@ browser.webRequest.onCompleted.addListener(
             return;
         }
 
-        tabStatusCodes.set(details.tabId, details.statusCode);
+        tabStatusCodes.set(details.tabId, {
+            url: details.url,
+            statusCode: details.statusCode
+        });
     },
     { urls: NITTER_INSTANCES.map(instance => instance + "/*") }
 );
@@ -103,7 +110,10 @@ browser.webNavigation.onBeforeNavigate.addListener((details) => {
         return;
     }
 
-    if (!TWITTER_HOSTS.has(url.hostname)) {
+    if (
+        !TWITTER_HOSTS.has(url.hostname) ||
+        UNSUPPORTED_PREFIXES.some(prefix => url.pathname.startsWith(prefix))
+    ) {
         return;
     }
 
@@ -204,14 +214,11 @@ browser.webNavigation.onCompleted.addListener((details) => {
         `[Twitter → Nitter] Loaded ${details.url}`
     );
 
-    // Give Nitter a moment to finish rendering.
-    setTimeout(() => {
-        inspectNitterPage(
-            details.tabId,
-            redirect,
-            url
-        );
-    }, 500);
+    inspectNitterPage(
+        details.tabId,
+        redirect,
+        url
+    );
 });
 
 
@@ -224,7 +231,15 @@ async function inspectNitterPage(
     redirect,
     url
 ) {
-    const statusCode = tabStatusCodes.get(tabId);
+    if (pendingRedirects.get(tabId) !== redirect) {
+        return;
+    }
+
+    const statusEntry = tabStatusCodes.get(tabId);
+    const statusCode =
+        statusEntry && statusEntry.url === url.href
+            ? statusEntry.statusCode
+            : undefined;
 
     if (statusCode !== undefined && (statusCode < 200 || statusCode >= 300)) {
         console.log(
