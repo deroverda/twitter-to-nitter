@@ -26,6 +26,7 @@ Unlike simple redirectors that point to a single hardcoded instance, this extens
 </p>
 
 - Preserves the original path, query string, and hash
+- Leaves `/i/*` paths (Spaces, login flows, and other X-specific features Nitter can't render) untouched
 - Detects rate-limited instances
 - Detects blank/completely empty pages
 - Detects empty timelines (profile, search, hashtag results)
@@ -75,11 +76,11 @@ Most Twitter/X redirector extensions request broad access (`<all_urls>`, every w
 - `storage` - to remember the last working instance
 - Host access to each configured Nitter instance only - needed to inspect the page content for rate-limit/empty-result detection
 
-No host permission for `x.com`/`twitter.com` at all - redirecting away from a page doesn't require it. No `<all_urls>`. No access to any site you're not already choosing to visit.
+No host permission for `x.com`/`twitter.com` at all - redirecting away from a page doesn't require it. No `<all_urls>`. Host access is limited to the configured Nitter instances themselves.
 
 ## Privacy
 
-No telemetry, analytics, tracking, remote configuration, or backend. The only network traffic is your browser talking directly to X/Twitter (before redirecting away) and the Nitter instance you land on.
+No telemetry, analytics, tracking, remote configuration, or backend. The extension has no servers of its own - it redirects X/Twitter navigations to a configured Nitter instance, and all network requests are made directly by your browser.
 
 ## No dependencies
 
