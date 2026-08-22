@@ -30,7 +30,9 @@ try the next instance          done - stay here
 
 - Preserves the original path, query string, and hash
 - Detects rate-limited instances
-- Detects empty/broken search results
+- Detects blank/completely empty pages
+- Detects empty timelines (profile, search, hashtag results)
+- Detects "Tweet not found" on status pages
 - Detects non-2xx HTTP responses (e.g. a bare 404 page)
 - Remembers the last working instance so future redirects skip straight to it
 
