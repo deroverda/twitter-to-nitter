@@ -17,7 +17,8 @@ const TWITTER_HOSTS = new Set([
 ]);
 
 const FAILURE_MESSAGES = [
-    "Instance has been rate limited"
+    "Instance has been rate limited",
+    "Tweet not found"
 ];
 
 const pendingRedirects = new Map();
