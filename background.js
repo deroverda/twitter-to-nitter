@@ -4,7 +4,7 @@ const NITTER_INSTANCES = [
     "https://nitter.privacyredirect.com",
     "https://xcancel.com",
     "https://lightbrd.com",
-    "https://nitter.space",
+    // "https://nitter.space", // disabled 2026-08-22, unreachable in real-browser test
     "https://nitter.tiekoetter.com",
     "https://nitter.catsarch.com"
 ];
@@ -277,6 +277,25 @@ async function inspectNitterPage(
         if (rateLimited) {
             console.log(
                 `[Twitter → Nitter] ${url.origin} is rate limited.`
+            );
+
+            tryNextInstance(
+                tabId,
+                redirect
+            );
+
+            return;
+        }
+
+
+        // ----------------------------------------------------
+        // Blank page (nothing rendered at all)
+        // ----------------------------------------------------
+
+        if (text.trim().length === 0) {
+
+            console.log(
+                `[Twitter → Nitter] ${url.origin} returned a blank page.`
             );
 
             tryNextInstance(
