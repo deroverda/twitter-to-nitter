@@ -1,0 +1,44 @@
+name: Nitter Instance Check
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check instances
+        id: check
+        run: |
+          INSTANCES="nitter.net nitter.poast.org nitter.privacyredirect.com xcancel.com lightbrd.com nitter.space nitter.tiekoetter.com nitter.catsarch.com"
+          DOWN=""
+          for host in $INSTANCES; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$host")
+            if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
+              DOWN="$DOWN\n- $host (HTTP $code)"
+            fi
+          done
+          if [ -n "$DOWN" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo -e "$DOWN" > down.txt
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update issue
+        if: steps.check.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY="The following instances failed their health check:\n\n$(cat down.txt)\n\nUpdate NITTER_INSTANCES in background.js if any of these are permanently dead."
+          EXISTING=$(gh issue list --search "Nitter instance check failing in:title" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$(echo -e "$BODY")"
+          else
+            gh issue create --title "Nitter instance check failing" --body "$(echo -e "$BODY")"
+          fi
