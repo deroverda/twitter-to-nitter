@@ -16,6 +16,8 @@ A tiny Firefox extension that automatically redirects `x.com` and `twitter.com` 
 
 Unlike simple redirectors that point to a single hardcoded instance, this extension tests the destination page before considering the redirect successful, and automatically falls back to the next instance if the first one is rate-limited, broken, or returns an error.
 
+> **Firefox Add-ons (AMO):** An AMO listing is planned.
+
 ## What it does
 
 <p align="center">
