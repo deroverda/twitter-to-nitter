@@ -6,7 +6,7 @@
 
 # Twitter/X to Nitter
 
-![License](https://img.shields.io/github/license/deroverda/twitter-to-nitter)
+![License](https://img.shields.io/badge/license-MIT-blue)
 ![Release](https://img.shields.io/github/v/release/deroverda/twitter-to-nitter)
 ![Last Commit](https://img.shields.io/github/last-commit/deroverda/twitter-to-nitter)
 
