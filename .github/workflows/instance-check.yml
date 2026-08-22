@@ -5,23 +5,18 @@ on:
     - cron: "0 8 * * *"
   workflow_dispatch:
 
-permissions:
-  issues: write
-
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Check instances
-        id: check
         run: |
           INSTANCES="nitter.net nitter.poast.org nitter.privacyredirect.com xcancel.com lightbrd.com nitter.space nitter.tiekoetter.com nitter.catsarch.com"
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-          DOWN=""
 
           echo "## Nitter instance check results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_Note: some instances block CI/datacenter IPs and will show as down here even when working fine for real users. Verify manually before acting._" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Instance | Status | HTTP code |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
@@ -31,29 +26,8 @@ jobs:
             if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
               echo "DOWN  $host (HTTP $code)"
               echo "| $host | ❌ down | $code |" >> "$GITHUB_STEP_SUMMARY"
-              DOWN="$DOWN\n- $host (HTTP $code)"
             else
               echo "OK    $host (HTTP $code)"
               echo "| $host | ✅ ok | $code |" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
-
-          if [ -n "$DOWN" ]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo -e "$DOWN" > down.txt
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Open or update issue
-        if: steps.check.outputs.found == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          BODY="The following instances failed their health check:\n\n$(cat down.txt)\n\nUpdate NITTER_INSTANCES in background.js if any of these are permanently dead."
-          EXISTING=$(gh issue list --search "Nitter instance check failing in:title" --state open --json number --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$(echo -e "$BODY")"
-          else
-            gh issue create --title "Nitter instance check failing" --body "$(echo -e "$BODY")"
-          fi
