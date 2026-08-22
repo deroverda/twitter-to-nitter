@@ -14,4 +14,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npx web-ext lint
+
+      - name: Run web-ext lint
+        run: |
+          echo "## Lint results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          set +e
+          npx web-ext lint > lint-output.txt 2>&1
+          EXIT_CODE=$?
+          set -e
+
+          cat lint-output.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ No issues found" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ Lint failed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          cat lint-output.txt
+          exit $EXIT_CODE
