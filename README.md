@@ -7,6 +7,9 @@
 # Twitter/X to Nitter
 
 ![License](https://img.shields.io/github/license/deroverda/twitter-to-nitter)
+![Release](https://img.shields.io/github/v/release/deroverda/twitter-to-nitter)
+![Last Commit](https://img.shields.io/github/last-commit/deroverda/twitter-to-nitter)
+
 
 
 A tiny Firefox extension that automatically redirects `x.com` and `twitter.com` links to a working Nitter frontend.
