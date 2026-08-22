@@ -18,9 +18,10 @@ jobs:
         id: check
         run: |
           INSTANCES="nitter.net nitter.poast.org nitter.privacyredirect.com xcancel.com lightbrd.com nitter.space nitter.tiekoetter.com nitter.catsarch.com"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
           DOWN=""
           for host in $INSTANCES; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$host")
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -A "$UA" "https://$host")
             if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
               echo "DOWN  $host (HTTP $code)"
               DOWN="$DOWN\n- $host (HTTP $code)"
