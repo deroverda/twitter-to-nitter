@@ -43,7 +43,7 @@ Configured in `background.js`:
 - nitter.privacyredirect.com
 - xcancel.com
 - lightbrd.com
-- nitter.space
+- ~~nitter.space~~ (disabled, unreachable as of 2026-08-22)
 - nitter.tiekoetter.com
 - nitter.catsarch.com
 
