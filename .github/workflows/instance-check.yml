@@ -22,7 +22,10 @@ jobs:
           for host in $INSTANCES; do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$host")
             if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
+              echo "DOWN  $host (HTTP $code)"
               DOWN="$DOWN\n- $host (HTTP $code)"
+            else
+              echo "OK    $host (HTTP $code)"
             fi
           done
           if [ -n "$DOWN" ]; then
