@@ -18,15 +18,9 @@ Unlike simple redirectors that point to a single hardcoded instance, this extens
 
 ## What it does
 
-```
-x.com/elonmusk
-      ↓
-tries a Nitter instance
-      ↓
-is it rate-limited / broken / a bad HTTP status?
-      ↓ yes                          ↓ no
-try the next instance          done - stay here
-```
+<p align="center">
+  <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check if it's broken, retry or stay">
+</p>
 
 - Preserves the original path, query string, and hash
 - Detects rate-limited instances
