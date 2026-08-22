@@ -19,7 +19,10 @@ Unlike simple redirectors that point to a single hardcoded instance, this extens
 ## What it does
 
 <p align="center">
-  <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check if it's broken, retry or stay">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
+    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check if it's broken, retry or stay">
+  </picture>
 </p>
 
 - Preserves the original path, query string, and hash
