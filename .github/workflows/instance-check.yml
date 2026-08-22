@@ -20,15 +20,24 @@ jobs:
           INSTANCES="nitter.net nitter.poast.org nitter.privacyredirect.com xcancel.com lightbrd.com nitter.space nitter.tiekoetter.com nitter.catsarch.com"
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
           DOWN=""
+
+          echo "## Nitter instance check results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Instance | Status | HTTP code |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
           for host in $INSTANCES; do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -A "$UA" "https://$host")
             if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
               echo "DOWN  $host (HTTP $code)"
+              echo "| $host | ❌ down | $code |" >> "$GITHUB_STEP_SUMMARY"
               DOWN="$DOWN\n- $host (HTTP $code)"
             else
               echo "OK    $host (HTTP $code)"
+              echo "| $host | ✅ ok | $code |" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
+
           if [ -n "$DOWN" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo -e "$DOWN" > down.txt
