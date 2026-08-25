@@ -4,8 +4,10 @@ name: Nitter Instance Check
 # service at https://status.d420.de/ (thanks to its operator).
 #
 # This runs once per day and makes a single request to the service. The
-# extension itself never contacts it at runtime -- the shipped instance list
-# stays hardcoded in background.js and is curated by hand from this report.
+# extension itself also polls this service at runtime (see STATUS_API in
+# background.js) to rank the shipped instances, but never to add or remove
+# one -- the instance list itself stays hardcoded and is curated by hand
+# from this report.
 #
 # This workflow never rewrites source files.
 
@@ -32,8 +34,11 @@ jobs:
             | sort -u > shipped.txt
 
           # Host permissions from the manifest, for the consistency check.
+          # status.d420.de is the health-service permission, not a Nitter
+          # instance, so it's excluded from this comparison.
           jq -r '.permissions[] | select(startswith("https://"))' manifest.json \
             | sed 's|https://||; s|/\*$||' \
+            | grep -v '^status\.d420\.de' \
             | sort -u > manifest-hosts.txt
 
           curl -sS --max-time 30 \

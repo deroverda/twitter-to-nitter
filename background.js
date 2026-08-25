@@ -61,7 +61,14 @@ const UNSUPPORTED_PREFIXES = [
     "/messages",
     "/settings",
     "/explore",
-    "/compose"
+    "/compose",
+    "/intent",
+    "/share",
+    "/login",
+    "/logout",
+    "/account",
+    "/tos",
+    "/privacy"
 ];
 
 // Canonical status permalinks under /i/ that Nitter does serve. Nitter itself
@@ -101,6 +108,8 @@ const INSTANCE_ORIGINS = new Set(
 const ORIGIN_TO_DOMAIN = new Map(
     NITTER_INSTANCES.map(instance => [instance, new URL(instance).hostname])
 );
+
+const KNOWN_STATUS_DOMAINS = new Set(ORIGIN_TO_DOMAIN.values());
 
 
 // ============================================================
@@ -206,7 +215,7 @@ function parseStatus(payload) {
     const hosts = {};
 
     for (const host of payload.hosts) {
-        if (!host || typeof host.domain !== "string") {
+        if (!host || typeof host.domain !== "string" || !KNOWN_STATUS_DOMAINS.has(host.domain)) {
             continue;
         }
 
@@ -450,6 +459,10 @@ browser.webRequest.onBeforeRequest.addListener(
 
         const path = url.pathname + url.search;
 
+        // A new X interception on this tab supersedes whatever the tab was
+        // doing before; clear any watchdog left over from that prior attempt
+        // so it can't fire later and act on this new record instead.
+        clearWatchdog(details.tabId);
         activeRedirects.set(details.tabId, { path: path, tried: [origin], timer: null });
         noteRedirect(details.tabId);
         armWatchdog(details.tabId, origin);
@@ -496,6 +509,7 @@ function armWatchdog(tabId, origin) {
     }
 
     clearWatchdog(tabId);
+    record.currentOrigin = origin;
 
     record.timer = setTimeout(() => {
         console.log(
@@ -507,7 +521,7 @@ function armWatchdog(tabId, origin) {
     }, NAV_TIMEOUT_MS);
 }
 
-function switchInstance(tabId, origin) {
+async function switchInstance(tabId, origin) {
     const record = activeRedirects.get(tabId);
 
     // The breaker guards new X interceptions (onBeforeRequest) against a
@@ -516,7 +530,35 @@ function switchInstance(tabId, origin) {
     // the instance list, and unrelated to the X-loop scenario the breaker
     // exists for. Gating it here previously stranded users on a broken
     // instance whenever several real failures happened in quick succession.
-    if (!record) {
+    // A live network event for an instance we've already given up on (e.g.
+    // its onErrorOccurred arriving after the watchdog already moved on to
+    // the next instance) must not touch the record of whatever we're
+    // currently tracking instead.
+    if (!record || record.currentOrigin !== origin) {
+        return;
+    }
+
+    // The failure event that led here (a completed/errored request, or the
+    // watchdog) can arrive after the user has already navigated the tab
+    // somewhere else entirely. Confirm the tab is still on the instance that
+    // just failed before redirecting it, so a stale event can't hijack
+    // whatever the user is looking at now. Only the origin is checked, not
+    // the exact path: the instance itself may have issued its own redirect
+    // (e.g. /i/web/status/<id> -> /i/status/<id>) before failing, and that is
+    // still the same attempt, not a user navigating away.
+    let currentUrl;
+
+    try {
+        currentUrl = new URL((await browser.tabs.get(tabId)).url);
+    } catch {
+        clearWatchdog(tabId);
+        activeRedirects.delete(tabId);
+        return;
+    }
+
+    if (currentUrl.origin !== origin) {
+        clearWatchdog(tabId);
+        activeRedirects.delete(tabId);
         return;
     }
 
@@ -531,15 +573,20 @@ function switchInstance(tabId, origin) {
     if (!next) {
         // Every configured instance has been tried for this navigation. Leave
         // the user where they are rather than looping.
+        activeRedirects.delete(tabId);
         return;
     }
+
+    // Use the tab's live path, not record.path: the instance may have
+    // redirected the user to a different path before failing.
+    const livePath = currentUrl.pathname + currentUrl.search;
 
     record.tried.push(next);
     noteRedirect(tabId);
     armWatchdog(tabId, next);
 
     browser.tabs
-        .update(tabId, { url: next + record.path })
+        .update(tabId, { url: next + livePath })
         .catch(() => {});
 }
 
@@ -555,7 +602,18 @@ browser.webRequest.onCompleted.addListener(
             return;
         }
 
-        clearWatchdog(details.tabId);
+        // Health is recorded for the instance regardless of whether it's the
+        // one we're still tracking: a live network event for an instance we
+        // already gave up on (its request kept running after our watchdog
+        // moved on) is still accurate signal about that instance. Only the
+        // state-machine actions (watchdog, fallback, record deletion) are
+        // restricted to the attempt currently being tracked.
+        const record = activeRedirects.get(details.tabId);
+        const isCurrent = Boolean(record && record.currentOrigin === origin);
+
+        if (isCurrent) {
+            clearWatchdog(details.tabId);
+        }
 
         if (isHardFailure(details.statusCode)) {
             console.log(
@@ -563,13 +621,19 @@ browser.webRequest.onCompleted.addListener(
             );
 
             recordLocal(origin, "BROKEN");
-            switchInstance(details.tabId, origin);
+
+            if (isCurrent) {
+                switchInstance(details.tabId, origin);
+            }
 
             return;
         }
 
         recordLocal(origin, "OK");
-        activeRedirects.delete(details.tabId);
+
+        if (isCurrent) {
+            activeRedirects.delete(details.tabId);
+        }
     },
     { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
 );
@@ -586,14 +650,22 @@ browser.webRequest.onErrorOccurred.addListener(
             return;
         }
 
-        clearWatchdog(details.tabId);
+        const record = activeRedirects.get(details.tabId);
+        const isCurrent = Boolean(record && record.currentOrigin === origin);
+
+        if (isCurrent) {
+            clearWatchdog(details.tabId);
+        }
 
         console.log(
             `[Twitter → Nitter] ${origin} failed to load; trying another instance.`
         );
 
         recordLocal(origin, "BROKEN");
-        switchInstance(details.tabId, origin);
+
+        if (isCurrent) {
+            switchInstance(details.tabId, origin);
+        }
     },
     { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
 );
