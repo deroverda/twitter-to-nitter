@@ -21,8 +21,8 @@
 
   <!-- C: decision diamond -->
   <polygon points="350,215 520,290 350,365 180,290" fill="#d4a017"/>
-  <text x="350" y="278" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="bold">Rate-limited, blank,</text>
-  <text x="350" y="298" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="bold">empty, or bad HTTP status?</text>
+  <text x="350" y="278" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="bold">Rate limited, blocked,</text>
+  <text x="350" y="298" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="bold">or unreachable?</text>
 
   <!-- No -> Done (left) -->
   <line x1="180" y1="290" x2="150" y2="393" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>

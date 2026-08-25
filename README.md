@@ -20,6 +20,13 @@ The request to X is **intercepted before it leaves your browser**. You never wat
 
 ## What it does
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
+    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check if it's rate limited, blocked, or unreachable, retry or stay">
+  </picture>
+</p>
+
 When you open an X/Twitter link:
 
 1. The request is intercepted and redirected to a Nitter instance **before it is sent**. The decision is instant - nothing is fetched or checked first.
@@ -35,7 +42,7 @@ Other behaviour:
 
 - Preserves the original path and query string
 - Redirects canonical status permalinks including `/i/status/<id>` and `/i/web/status/<id>`
-- Leaves X-only surfaces alone: `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, and the rest of `/i/*`
+- Leaves X-only surfaces alone: `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, and the rest of `/i/*`
 - Treats a 404 as a legitimate Nitter answer, not a broken instance
 - Remembers instances that failed for you and demotes them for a while
 - Stops redirecting a tab briefly if it detects a redirect loop
@@ -86,7 +93,7 @@ No `<all_urls>`. No access to any site other than X/Twitter and the configured N
 No telemetry, no analytics, no tracking, no backend of ours.
 
 - **X never receives your request.** It is redirected inside your browser before it is sent, so X does not learn that you clicked.
-- **Your URL goes to exactly one Nitter instance** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. It is never sent to more than one.
+- **Your URL goes to one Nitter instance at a time** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. If that instance fails, the extension falls back to another configured instance, so the same path may reach more than one instance sequentially over the course of one navigation - never simultaneously, and never to more than the instances listed above.
 - **The health service receives no browsing data.** The extension requests one fixed URL with no parameters and no cookies, on a timer, identical for every user and unrelated to what you browse. It is never contacted as part of a navigation.
 - **The extension sends no probe traffic to Nitter instances.** Instance health is learned from pages you loaded anyway.
 - Instance health and ranking are stored locally and never leave your browser.
@@ -98,7 +105,7 @@ One thing this extension cannot do anything about: **some Nitter instances do no
 - Nitter's own "Open in X" link does not work, because the extension intercepts that navigation too. Use a private window or disable the extension to reach X deliberately.
 - The instance list is fixed at release time. If the whole fleet degrades, an updated build is required.
 - On instances that do not proxy media, media still loads from Twitter's CDN. See Privacy above.
-- `/home`, `/notifications`, `/messages`, `/settings`, `/explore` and `/compose` stay on X, because Nitter has no equivalent for them.
+- `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent` and `/share` stay on X, because Nitter has no equivalent for them.
 
 ## No dependencies
 
