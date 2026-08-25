@@ -42,7 +42,7 @@ Other behaviour:
 
 - Preserves the original path and query string
 - Redirects canonical status permalinks including `/i/status/<id>` and `/i/web/status/<id>`
-- Leaves X-only surfaces alone: `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, and the rest of `/i/*`
+- Leaves X-only surfaces alone: `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, `/privacy`, and the rest of `/i/*`
 - Treats a 404 as a legitimate Nitter answer, not a broken instance
 - Remembers instances that failed for you and demotes them for a while
 - Stops redirecting a tab briefly if it detects a redirect loop
@@ -84,6 +84,7 @@ Current releases are privately signed "unlisted" builds made via [`web-ext sign`
 - `webRequest` + `webRequestBlocking` - to intercept the X/Twitter request and redirect it **before it is sent**, and to see the HTTP status of the Nitter page you land on
 - Host access to `x.com` and `twitter.com` (plus their `www.` and `mobile.` forms) - required to intercept those requests at all
 - Host access to each configured Nitter instance - required to redirect to them and read the response status
+- Host access to `status.d420.de/api/*` - to fetch the fleet health ranking (see Instances above); no other path on that domain is requested
 - `storage` - to remember the cached ranking and which instances failed for you
 
 **Why the X host permission is worth it.** An earlier version avoided it, and the cost was that X still received your request while the extension decided where to send you. Intercepting properly is what makes the guarantee real: with these permissions, **X is never contacted at all**. The permission buys the privacy, it doesn't spend it.
@@ -107,7 +108,7 @@ One thing this extension cannot do anything about: **some Nitter instances do no
 - Nitter's own "Open in X" link does not work, because the extension intercepts that navigation too. Use a private window or disable the extension to reach X deliberately.
 - The instance list is fixed at release time. If the whole fleet degrades, an updated build is required.
 - On instances that do not proxy media, media still loads from Twitter's CDN. See Privacy above.
-- `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent` and `/share` stay on X, because Nitter has no equivalent for them.
+- `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, and `/privacy` stay on X, because Nitter has no equivalent for them.
 
 ## No dependencies
 
