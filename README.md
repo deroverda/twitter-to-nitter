@@ -12,52 +12,53 @@
 
 
 
-A tiny Firefox extension that automatically redirects `x.com` and `twitter.com` links to a working Nitter frontend.
+A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working Nitter frontend.
 
-Unlike simple redirectors that point to a single hardcoded instance, this extension tests the destination page before considering the redirect successful, and automatically falls back to the next instance if the first one is rate-limited, broken, or returns an error.
+The request to X is **intercepted before it leaves your browser**. You never watch X load first, and X never receives the navigation.
 
 > **Firefox Add-ons (AMO):** An AMO listing is planned.
 
 ## What it does
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
-    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check if it's broken, retry or stay">
-  </picture>
-</p>
+When you open an X/Twitter link:
 
-- Preserves the original path, query string, and hash
-- Leaves `/i/*` paths (Spaces, login flows, and other X-specific features Nitter can't render) untouched
-- Detects rate-limited instances
-- Detects blank/completely empty pages
-- Detects empty timelines (profile, search, hashtag results)
-- Detects "Tweet not found" on status pages
-- Detects non-2xx HTTP responses (e.g. a bare 404 page)
-- Remembers the last working instance so future redirects skip straight to it
+1. The request is intercepted and redirected to a Nitter instance **before it is sent**. The decision is instant - nothing is fetched or checked first.
+2. Which instance you get is decided from a locally cached ranking, refreshed in the background.
+3. If that instance turns out to be unusable for you - rate limited, blocked, unreachable - the extension notices and moves you to the next candidate.
+
+Instance ranking comes from two independent sources:
+
+- **Fleet health** from the [Nitter Instance Health](https://status.d420.de/) service, polled about every 15 minutes in the background and cached locally. Its API exists to serve redirectors like this one.
+- **Your own results.** The outcome of the pages you actually load is the only instance data specific to your network, and it takes priority. The extension sends no probe traffic of its own to public Nitter instances.
+
+Other behaviour:
+
+- Preserves the original path and query string
+- Redirects canonical status permalinks including `/i/status/<id>` and `/i/web/status/<id>`
+- Leaves X-only surfaces alone: `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, and the rest of `/i/*`
+- Treats a 404 as a legitimate Nitter answer, not a broken instance
+- Remembers instances that failed for you and demotes them for a while
+- Stops redirecting a tab briefly if it detects a redirect loop
 
 ## Instances
 
 Configured in `background.js`:
 
 - nitter.net
-- nitter.poast.org
-- nitter.privacyredirect.com
 - xcancel.com
-- lightbrd.com
-- ~~nitter.space~~ (disabled, unreachable as of 2026-08-22)
-- nitter.tiekoetter.com
 - nitter.catsarch.com
+- lightbrd.com
+- nitter.kareem.one
 
-Public Nitter instances go offline or change behavior over time. If one stops working, check the [releases page](https://github.com/deroverda/twitter-to-nitter/releases/latest) for an updated build, or maintain your own fork.
+The list is hardcoded and only changes when a new version is released. If every configured instance is unhealthy, the extension still sends you to the least-bad one rather than to X - redirecting to Nitter is the whole point. A daily CI check compares the shipped list against the health service and verifies that each instance still serves real Nitter markup.
 
-If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entry in `manifest.json` only takes effect for regular users after you bump the version, re-sign with `web-ext sign --channel=unlisted`, and publish a new `.xpi`. Editing the files directly only applies immediately if you're running the extension unpacked via `about:debugging` → "Load Temporary Add-on".
+If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entries in `manifest.json` only takes effect for regular users after you bump the version, re-sign, and publish a new `.xpi`.
 
 ## Install
 
 ### Temporary (development)
 
-1. Open `about:debugging#/runtime/this-firefox` in Firefox
+1. Open `about:debugging#/runtime/this-firefox`
 2. Click "Load Temporary Add-on"
 3. Select `manifest.json` from this folder
 
@@ -67,22 +68,37 @@ This is wiped on every Firefox restart.
 
 Download the signed `.xpi` from the [latest release](https://github.com/deroverda/twitter-to-nitter/releases/latest), then install it through `about:addons` → gear icon → "Install Add-on From File...".
 
-This is a privately signed "unlisted" build made via [`web-ext sign`](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/) with a free Mozilla developer account. It is never listed publicly on AMO. To build/sign your own copy instead of using the release, run `web-ext sign --channel=unlisted` against this repo with your own Mozilla API credentials.
+Current releases are privately signed "unlisted" builds made via [`web-ext sign`](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/) with a free Mozilla developer account.
 
-## Why minimal permissions
+## Permissions, and why each is needed
 
-Most Twitter/X redirector extensions request broad access (`<all_urls>`, every website) even though they only ever touch two domains. This extension requests only what it actually needs:
+- `webRequest` + `webRequestBlocking` - to intercept the X/Twitter request and redirect it **before it is sent**, and to see the HTTP status of the Nitter page you land on
+- Host access to `x.com` and `twitter.com` (plus their `www.` and `mobile.` forms) - required to intercept those requests at all
+- Host access to each configured Nitter instance - required to redirect to them and read the response status
+- `storage` - to remember the cached ranking and which instances failed for you
 
-- `webNavigation` / `tabs` - to detect and redirect X/Twitter navigation
-- `webRequest` - to check the HTTP status of the Nitter page it lands on
-- `storage` - to remember the last working instance
-- Host access to each configured Nitter instance only - needed to inspect the page content for rate-limit/empty-result detection
+**Why the X host permission is worth it.** An earlier version avoided it, and the cost was that X still received your request while the extension decided where to send you. Intercepting properly is what makes the guarantee real: with these permissions, **X is never contacted at all**. The permission buys the privacy, it doesn't spend it.
 
-No host permission for `x.com`/`twitter.com` at all - redirecting away from a page doesn't require it. No `<all_urls>`. Host access is limited to the configured Nitter instances themselves.
+No `<all_urls>`. No access to any site other than X/Twitter and the configured Nitter instances.
 
 ## Privacy
 
-No telemetry, analytics, tracking, remote configuration, or backend. The extension has no servers of its own - it redirects X/Twitter navigations to a configured Nitter instance, and all network requests are made directly by your browser.
+No telemetry, no analytics, no tracking, no backend of ours.
+
+- **X never receives your request.** It is redirected inside your browser before it is sent, so X does not learn that you clicked.
+- **Your URL goes to exactly one Nitter instance** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. It is never sent to more than one.
+- **The health service receives no browsing data.** The extension requests one fixed URL with no parameters and no cookies, on a timer, identical for every user and unrelated to what you browse. It is never contacted as part of a navigation.
+- **The extension sends no probe traffic to Nitter instances.** Instance health is learned from pages you loaded anyway.
+- Instance health and ranking are stored locally and never leave your browser.
+
+One thing this extension cannot do anything about: **some Nitter instances do not proxy media.** On those, your browser loads images and video directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), which means Twitter-owned infrastructure still sees which profile and media you viewed. Whether media is proxied is the instance operator's choice, not something a redirector can change. If that matters to you, prefer an instance with proxying enabled, or run your own.
+
+## Known limitations
+
+- Nitter's own "Open in X" link does not work, because the extension intercepts that navigation too. Use a private window or disable the extension to reach X deliberately.
+- The instance list is fixed at release time. If the whole fleet degrades, an updated build is required.
+- On instances that do not proxy media, media still loads from Twitter's CDN. See Privacy above.
+- `/home`, `/notifications`, `/messages`, `/settings`, `/explore` and `/compose` stay on X, because Nitter has no equivalent for them.
 
 ## No dependencies
 

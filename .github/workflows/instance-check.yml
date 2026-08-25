@@ -1,5 +1,14 @@
 name: Nitter Instance Check
 
+# Maintainer aid only. Health data comes from the Nitter Instance Health
+# service at https://status.d420.de/ (thanks to its operator).
+#
+# This runs once per day and makes a single request to the service. The
+# extension itself never contacts it at runtime -- the shipped instance list
+# stays hardcoded in background.js and is curated by hand from this report.
+#
+# This workflow never rewrites source files.
+
 on:
   schedule:
     - cron: "0 8 * * *"
@@ -9,25 +18,147 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Check instances
+      - uses: actions/checkout@v4
+
+      - name: Compare shipped instances against status.d420.de
         run: |
-          INSTANCES="nitter.net nitter.poast.org nitter.privacyredirect.com xcancel.com lightbrd.com nitter.space nitter.tiekoetter.com nitter.catsarch.com"
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          set -euo pipefail
 
-          echo "## Nitter instance check results" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "_Note: some instances block CI/datacenter IPs and will show as down here even when working fine for real users. Verify manually before acting._" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Instance | Status | HTTP code |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          # Shipped list is derived from background.js so this check cannot
+          # drift out of sync with the extension itself.
+          sed -n '/^const NITTER_INSTANCES/,/^\];/p' background.js \
+            | grep -o 'https://[a-z0-9.-]*' \
+            | sed 's|https://||' \
+            | sort -u > shipped.txt
 
-          for host in $INSTANCES; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -A "$UA" "https://$host")
-            if [ "$code" -lt 200 ] || [ "$code" -ge 400 ]; then
-              echo "DOWN  $host (HTTP $code)"
-              echo "| $host | ❌ down | $code |" >> "$GITHUB_STEP_SUMMARY"
+          # Host permissions from the manifest, for the consistency check.
+          jq -r '.permissions[] | select(startswith("https://"))' manifest.json \
+            | sed 's|https://||; s|/\*$||' \
+            | sort -u > manifest-hosts.txt
+
+          curl -sS --max-time 30 \
+            -H "User-Agent: twitter-to-nitter CI instance check (https://github.com/deroverda/twitter-to-nitter)" \
+            "https://status.d420.de/api/v1/instances" -o api.json
+
+          jq -r '.hosts[] | select(.healthy == true) | .domain' api.json | sort -u > healthy.txt
+          jq -r '.hosts[] | select(.healthy != true) | .domain' api.json | sort -u > unhealthy.txt
+          jq -r '.hosts[].domain' api.json | sort -u > tracked.txt
+
+          {
+            echo "## Nitter instance check"
+            echo ""
+            echo "Health data: [status.d420.de](https://status.d420.de/) - snapshot \`$(jq -r '.last_update' api.json)\`"
+            echo ""
+            echo "_The service measures from its own vantage point. It cannot predict what a"
+            echo "given user's browser will get, especially where instances are challenge-gated._"
+            echo "_Verify manually before removing an instance._"
+            echo ""
+
+            echo "### Shipped instances"
+            echo ""
+            echo "| Instance | Service status | Nitter version |"
+            echo "|---|---|---|"
+            while read -r host; do
+              if ! grep -qx "$host" tracked.txt; then
+                echo "| $host | not tracked | - |"
+              elif grep -qx "$host" healthy.txt; then
+                ver=$(jq -r --arg h "$host" '.hosts[] | select(.domain==$h) | .version // "-"' api.json)
+                pts=$(jq -r --arg h "$host" '.hosts[] | select(.domain==$h) | .points' api.json)
+                echo "| $host | healthy ($pts pts) | $ver |"
+              else
+                echo "| $host | UNHEALTHY | - |"
+              fi
+            done < shipped.txt
+            echo ""
+
+            echo "### Healthy instances not shipped"
+            echo ""
+            if comm -23 healthy.txt shipped.txt | grep -q .; then
+              echo "| Instance | Points | Avg ping | Version |"
+              echo "|---|---|---|---|"
+              comm -23 healthy.txt shipped.txt | while read -r host; do
+                jq -r --arg h "$host" '.hosts[] | select(.domain==$h)
+                  | "| \(.domain) | \(.points) | \(.ping_avg // "-")ms | \(.version // "-") |"' api.json
+              done
             else
-              echo "OK    $host (HTTP $code)"
-              echo "| $host | ✅ ok | $code |" >> "$GITHUB_STEP_SUMMARY"
+              echo "None."
             fi
-          done
+            echo ""
+
+            echo "### Version drift"
+            echo ""
+            latest=$(jq -r '.latest_commit[0:7]' api.json)
+            echo "Latest upstream commit: \`$latest\`"
+            echo ""
+            drift=$(jq -r '.hosts[] | select(.healthy == true and .is_latest_version == false)
+              | "- \(.domain): \(.version // "unknown") (\(.version_state // "unknown"))"' api.json)
+            if [ -n "$drift" ]; then
+              echo "Healthy instances not on the latest version:"
+              echo ""
+              echo "$drift"
+              echo ""
+              echo "_Relevant because the extension verifies pages using upstream Nitter template markers._"
+            else
+              echo "All healthy instances are on the latest version."
+            fi
+            echo ""
+
+            echo "### background.js / manifest.json consistency"
+            echo ""
+            if diff -q shipped.txt manifest-hosts.txt > /dev/null; then
+              echo "Host permissions match the shipped instance list."
+            else
+              echo "**Mismatch between \`NITTER_INSTANCES\` and manifest host permissions:**"
+              echo ""
+              echo '```'
+              diff shipped.txt manifest-hosts.txt || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "--- shipped ---";   cat shipped.txt
+          echo "--- healthy ---";   cat healthy.txt
+          echo "--- unhealthy ---"; cat unhealthy.txt
+
+      - name: Verify shipped instances serve real Nitter markup
+        run: |
+          set -uo pipefail
+
+          # Structural markers taken from Nitter's own page templates
+          # (src/views/general.nim), which every server-rendered page passes
+          # through. og:site_name is a hardcoded literal, so rebranded forks
+          # still match. Errors render into .error-panel.
+          #
+          # This check lives here rather than in the extension so that users'
+          # browsers never generate probe traffic to public instances.
+
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
+          {
+            echo "### Nitter markup verification"
+            echo ""
+            echo "_Runs from a GitHub datacenter IP. Instances behind anti-bot"
+            echo "challenges will show as CHALLENGE here even when they work fine in"
+            echo "a real browser, which is exactly why the extension no longer probes._"
+            echo ""
+            echo "| Instance | HTTP | Verdict |"
+            echo "|---|---|---|"
+
+            while read -r host; do
+              code=$(curl -s -o body.html -w "%{http_code}" --max-time 15 -L -A "$UA" "https://$host/jack" || echo "000")
+
+              if [ "$code" != "200" ]; then
+                verdict="unreachable / HTTP $code"
+              elif grep -qiE 'property="og:site_name"[^>]*content="Nitter"|/css/style\.css|class="inner-nav"' body.html; then
+                if grep -qi 'class="error-panel"' body.html; then
+                  verdict="Nitter, but serving an error panel"
+                else
+                  verdict="OK - real Nitter markup"
+                fi
+              else
+                verdict="CHALLENGE / not recognisable as Nitter"
+              fi
+
+              echo "| $host | $code | $verdict |"
+            done < shipped.txt
+          } >> "$GITHUB_STEP_SUMMARY"
