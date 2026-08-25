@@ -616,14 +616,17 @@ browser.webRequest.onCompleted.addListener(
         }
 
         if (isHardFailure(details.statusCode)) {
-            console.log(
-                `[Twitter → Nitter] ${origin} returned HTTP ${details.statusCode}; trying another instance.`
-            );
-
             recordLocal(origin, "BROKEN");
 
             if (isCurrent) {
+                console.log(
+                    `[Twitter → Nitter] ${origin} returned HTTP ${details.statusCode}; trying another instance.`
+                );
                 switchInstance(details.tabId, origin);
+            } else {
+                console.log(
+                    `[Twitter → Nitter] ${origin} returned HTTP ${details.statusCode} for an attempt already superseded; ignoring.`
+                );
             }
 
             return;
@@ -657,14 +660,17 @@ browser.webRequest.onErrorOccurred.addListener(
             clearWatchdog(details.tabId);
         }
 
-        console.log(
-            `[Twitter → Nitter] ${origin} failed to load; trying another instance.`
-        );
-
         recordLocal(origin, "BROKEN");
 
         if (isCurrent) {
+            console.log(
+                `[Twitter → Nitter] ${origin} failed to load; trying another instance.`
+            );
             switchInstance(details.tabId, origin);
+        } else {
+            console.log(
+                `[Twitter → Nitter] ${origin} failed to load for an attempt already superseded; ignoring.`
+            );
         }
     },
     { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
