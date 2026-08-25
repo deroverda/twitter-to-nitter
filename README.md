@@ -44,7 +44,7 @@ Other behaviour:
 
 Configured in `background.js`:
 
-- nitter.net
+- ~~nitter.net~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
 - xcancel.com
 - nitter.catsarch.com
 - lightbrd.com

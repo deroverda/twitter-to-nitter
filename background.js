@@ -24,7 +24,10 @@
 
 // Curated from status.d420.de plus direct verification (see the CI check).
 const NITTER_INSTANCES = [
-    "https://nitter.net",
+    // "https://nitter.net", // disabled 2026-08-25: operator (zedeus) received a
+    // cease-and-desist from X Corp on 2026-08-24 and shut the instance down.
+    // Upstream Nitter development itself is paused. Re-enable only if it
+    // comes back and is independently verified.
     "https://xcancel.com",
     "https://nitter.catsarch.com",
     "https://lightbrd.com",
@@ -507,7 +510,13 @@ function armWatchdog(tabId, origin) {
 function switchInstance(tabId, origin) {
     const record = activeRedirects.get(tabId);
 
-    if (!record || breakerOpen(tabId)) {
+    // The breaker guards new X interceptions (onBeforeRequest) against a
+    // genuine redirect loop. It must not also gate recovery here: hopping
+    // between Nitter instances within one navigation is expected, bounded by
+    // the instance list, and unrelated to the X-loop scenario the breaker
+    // exists for. Gating it here previously stranded users on a broken
+    // instance whenever several real failures happened in quick succession.
+    if (!record) {
         return;
     }
 
