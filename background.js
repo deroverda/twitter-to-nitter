@@ -28,9 +28,17 @@ const NITTER_INSTANCES = [
     // cease-and-desist from X Corp on 2026-08-24 and shut the instance down.
     // Upstream Nitter development itself is paused. Re-enable only if it
     // comes back and is independently verified.
-    "https://xcancel.com",
+    // "https://xcancel.com", // disabled 2026-08-25: operator received a
+    // cease-and-desist from X Corp on 2026-08-24 and shut the instance down.
+    // Re-enable only if it comes back and is independently verified.
     "https://nitter.catsarch.com",
-    "https://lightbrd.com",
+    // "https://lightbrd.com", // disabled 2026-08-25: not tracked by
+    // status.d420.de, failing in real navigation (403/504), and per
+    // github.com/zedeus/nitter/issues/1209 it doesn't proxy images/video/GIFs
+    // (they connect directly to Twitter's CDN) and loads Microsoft Clarity
+    // analytics -- a privacy leak this extension exists to avoid regardless
+    // of uptime. Re-enable only if both issues are independently verified
+    // fixed.
     "https://nitter.kareem.one"
 ];
 
@@ -297,13 +305,9 @@ async function refreshStatus() {
 // ============================================================
 
 function recordLocal(origin, state) {
-    const previous = localHealth[origin];
-
     localHealth[origin] = {
         state: state,
-        at: Date.now(),
-        failureCount:
-            state === "OK" ? 0 : ((previous && previous.failureCount) || 0) + 1
+        at: Date.now()
     };
 
     recomputeRanking();
@@ -435,6 +439,15 @@ browser.webRequest.onBeforeRequest.addListener(
             return {};
         }
 
+        // tabId is -1 for requests not tied to a real tab, e.g. Firefox's
+        // speculative/predictive connections for address-bar suggestions.
+        // There is no tab to redirect, and tracking a record keyed by -1
+        // would let it collide with -- and cascade unrelated fallback
+        // attempts against -- every other such phantom request.
+        if (details.tabId < 0) {
+            return {};
+        }
+
         let url;
 
         try {
@@ -463,7 +476,7 @@ browser.webRequest.onBeforeRequest.addListener(
         // doing before; clear any watchdog left over from that prior attempt
         // so it can't fire later and act on this new record instead.
         clearWatchdog(details.tabId);
-        activeRedirects.set(details.tabId, { path: path, tried: [origin], timer: null });
+        activeRedirects.set(details.tabId, { path: path, tried: [origin], timer: null, switching: false });
         noteRedirect(details.tabId);
         armWatchdog(details.tabId, origin);
 
@@ -517,11 +530,11 @@ function armWatchdog(tabId, origin) {
         );
 
         recordLocal(origin, "BROKEN");
-        switchInstance(tabId, origin);
+        switchInstance(tabId, origin, { skipCommittedCheck: true });
     }, NAV_TIMEOUT_MS);
 }
 
-async function switchInstance(tabId, origin) {
+async function switchInstance(tabId, origin, { skipCommittedCheck = false } = {}) {
     const record = activeRedirects.get(tabId);
 
     // The breaker guards new X interceptions (onBeforeRequest) against a
@@ -534,32 +547,65 @@ async function switchInstance(tabId, origin) {
     // its onErrorOccurred arriving after the watchdog already moved on to
     // the next instance) must not touch the record of whatever we're
     // currently tracking instead.
-    if (!record || record.currentOrigin !== origin) {
+    // record.switching blocks a second call (e.g. a late onErrorOccurred
+    // arriving while the watchdog's own switch is still awaiting tabs.get)
+    // from acting on the same attempt twice.
+    if (!record || record.currentOrigin !== origin || record.switching) {
         return;
     }
 
-    // The failure event that led here (a completed/errored request, or the
-    // watchdog) can arrive after the user has already navigated the tab
-    // somewhere else entirely. Confirm the tab is still on the instance that
-    // just failed before redirecting it, so a stale event can't hijack
-    // whatever the user is looking at now. Only the origin is checked, not
-    // the exact path: the instance itself may have issued its own redirect
-    // (e.g. /i/web/status/<id> -> /i/status/<id>) before failing, and that is
-    // still the same attempt, not a user navigating away.
-    let currentUrl;
+    record.switching = true;
 
-    try {
-        currentUrl = new URL((await browser.tabs.get(tabId)).url);
-    } catch {
-        clearWatchdog(tabId);
-        activeRedirects.delete(tabId);
-        return;
-    }
+    let livePath;
 
-    if (currentUrl.origin !== origin) {
-        clearWatchdog(tabId);
-        activeRedirects.delete(tabId);
-        return;
+    if (skipCommittedCheck) {
+        // Nothing committed for this attempt: either the watchdog timed out
+        // waiting for a response, or the request failed at the network level
+        // (onErrorOccurred -- offline, DNS failure, connection refused,
+        // aborted) before any document loaded. In both cases the tab's URL
+        // still reflects whatever page it was on *before* the redirect (or is
+        // absent entirely, since this extension has no "tabs" permission) --
+        // never the failed instance. Reading it here would misidentify the
+        // failure as the user navigating away and abandon the fallback. Use
+        // the path we originally sent the tab to instead.
+        livePath = record.path;
+    } else {
+        // onCompleted with a hard-failure status: the instance actually
+        // returned an HTTP response, so the request committed and the tab's
+        // URL reflects it. Confirm the tab is still on the instance that just
+        // failed before redirecting it, so a stale event can't hijack
+        // whatever the user is looking at now. Only the origin is checked,
+        // not the exact path: the instance itself may have issued its own
+        // redirect (e.g. /i/web/status/<id> -> /i/status/<id>) before
+        // failing, and that is still the same attempt, not a user navigating
+        // away.
+        let currentUrl;
+
+        try {
+            currentUrl = new URL((await browser.tabs.get(tabId)).url);
+        } catch {
+            clearWatchdog(tabId);
+            activeRedirects.delete(tabId);
+            return;
+        }
+
+        // A new X interception can replace this tab's record while the
+        // tabs.get() above was in flight. Re-fetch and confirm it's still the
+        // same attempt before touching anything.
+        if (activeRedirects.get(tabId) !== record || record.currentOrigin !== origin) {
+            record.switching = false;
+            return;
+        }
+
+        if (currentUrl.origin !== origin) {
+            clearWatchdog(tabId);
+            activeRedirects.delete(tabId);
+            return;
+        }
+
+        // Use the tab's live path, not record.path: the instance may have
+        // redirected the user to a different path before failing.
+        livePath = currentUrl.pathname + currentUrl.search;
     }
 
     clearWatchdog(tabId);
@@ -577,12 +623,8 @@ async function switchInstance(tabId, origin) {
         return;
     }
 
-    // Use the tab's live path, not record.path: the instance may have
-    // redirected the user to a different path before failing.
-    const livePath = currentUrl.pathname + currentUrl.search;
-
     record.tried.push(next);
-    noteRedirect(tabId);
+    record.switching = false;
     armWatchdog(tabId, next);
 
     browser.tabs
@@ -666,7 +708,7 @@ browser.webRequest.onErrorOccurred.addListener(
             console.log(
                 `[Twitter → Nitter] ${origin} failed to load; trying another instance.`
             );
-            switchInstance(details.tabId, origin);
+            switchInstance(details.tabId, origin, { skipCommittedCheck: true });
         } else {
             console.log(
                 `[Twitter → Nitter] ${origin} failed to load for an attempt already superseded; ignoring.`

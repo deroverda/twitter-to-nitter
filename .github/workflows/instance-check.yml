@@ -27,8 +27,11 @@ jobs:
           set -euo pipefail
 
           # Shipped list is derived from background.js so this check cannot
-          # drift out of sync with the extension itself.
+          # drift out of sync with the extension itself. Comment-only lines
+          # (e.g. a disabled instance left in place for reference) are
+          # excluded first so a commented-out URL isn't counted as shipped.
           sed -n '/^const NITTER_INSTANCES/,/^\];/p' background.js \
+            | grep -v '^[[:space:]]*//' \
             | grep -o 'https://[a-z0-9.-]*' \
             | sed 's|https://||' \
             | sort -u > shipped.txt
@@ -124,6 +127,11 @@ jobs:
           echo "--- shipped ---";   cat shipped.txt
           echo "--- healthy ---";   cat healthy.txt
           echo "--- unhealthy ---"; cat unhealthy.txt
+
+          if ! diff -q shipped.txt manifest-hosts.txt > /dev/null; then
+            echo "::error::NITTER_INSTANCES and manifest host permissions are out of sync."
+            exit 1
+          fi
 
       - name: Verify shipped instances serve real Nitter markup
         run: |

@@ -52,12 +52,14 @@ Other behaviour:
 Configured in `background.js`:
 
 - ~~nitter.net~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
-- xcancel.com
+- ~~xcancel.com~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
 - nitter.catsarch.com
-- lightbrd.com
+- ~~lightbrd.com~~ (disabled 2026-08-25: doesn't proxy images/video/GIFs and loads Microsoft Clarity analytics, per [zedeus/nitter#1209](https://github.com/zedeus/nitter/issues/1209))
 - nitter.kareem.one
 
 The list is hardcoded and only changes when a new version is released. If every configured instance is unhealthy, the extension still sends you to the least-bad one rather than to X - redirecting to Nitter is the whole point. A daily CI check compares the shipped list against the health service and verifies that each instance still serves real Nitter markup.
+
+**The public Nitter fleet is currently under pressure.** In the same week (2026-08-24), X Corp sent cease-and-desist letters to at least two instance operators, and upstream Nitter development itself is paused. This extension only has two active instances configured as of this release. If you rely on this daily, keep an eye on the [instance health service](https://status.d420.de/) or this repo's releases for updates - the fleet could shrink further, or a fixed instance list may not reflect reality between releases.
 
 If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entries in `manifest.json` only takes effect for regular users after you bump the version, re-sign, and publish a new `.xpi`.
 

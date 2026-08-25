@@ -23,7 +23,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
           set +e
-          npx web-ext lint > lint-output.txt 2>&1
+          npx web-ext@10.6.0 lint > lint-output.txt 2>&1
           EXIT_CODE=$?
           set -e
 

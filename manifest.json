@@ -16,9 +16,7 @@
     "*://x.com/*",
     "*://www.x.com/*",
     "*://mobile.x.com/*",
-    "https://xcancel.com/*",
     "https://nitter.catsarch.com/*",
-    "https://lightbrd.com/*",
     "https://nitter.kareem.one/*",
     "https://status.d420.de/api/*"
   ],
