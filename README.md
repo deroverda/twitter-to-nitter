@@ -16,7 +16,10 @@ A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working N
 
 The request to X is **intercepted before it leaves your browser**. You never watch X load first, and X never receives the navigation.
 
-> **Firefox Add-ons (AMO):** An AMO listing is planned.
+> [!WARNING]
+> On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter) - the repository is now archived. Most public instances have since shut down; this extension is down to 2 configured instances, both showing real instability. See [Instances](#instances) below and [zedeus/nitter#1442](https://github.com/zedeus/nitter/issues/1442) for the live situation. The extension's own fallback logic handles a down instance automatically, but if the whole fleet is down, you'll simply see a broken page.
+
+> **Firefox Add-ons (AMO):** A public listing isn't planned while the fleet is this unstable - revisit if/when Nitter recovers. Releases in the meantime are private, unlisted signed builds (see Install below).
 
 ## What it does
 
@@ -61,7 +64,7 @@ Configured in `background.js`:
 
 The list is hardcoded and only changes when a new version is released. If every configured instance is unhealthy, the extension still sends you to the least-bad one rather than to X - redirecting to Nitter is the whole point. A daily CI check compares the shipped list against the health service and verifies that each instance still serves real Nitter markup.
 
-**The public Nitter fleet is currently under serious pressure.** On 2026-08-24, X Corp sent cease-and-desist letters demanding takedown of Nitter instances and of the [upstream project itself](https://github.com/zedeus/nitter) - the repository is now archived. Several instance operators have since shut down, including one of the two active instances below, whose operator described it as a precaution pending more legal clarity, not necessarily permanent (see [zedeus/nitter#1442](https://github.com/zedeus/nitter/issues/1442) for the broader thread). This extension's own fallback logic handles a down instance automatically, but if every configured instance is down at once, you will simply see a broken page - that's expected right now, not a bug. If you rely on this daily, keep an eye on the [instance health service](https://status.d420.de/) or this repo's releases for updates.
+See the notice at the top of this README for the broader situation. If you rely on this daily, keep an eye on the [instance health service](https://status.d420.de/) or this repo's releases for updates - the fleet could shrink further, or a fixed instance list may not reflect reality between releases.
 
 If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entries in `manifest.json` only takes effect for regular users after you bump the version, re-sign, and publish a new `.xpi`.
 
