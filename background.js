@@ -525,16 +525,15 @@ function armWatchdog(tabId, origin) {
     record.currentOrigin = origin;
 
     record.timer = setTimeout(() => {
-        console.log(
-            `[Twitter → Nitter] ${origin} did not respond in time; trying another instance.`
-        );
-
         recordLocal(origin, "BROKEN");
-        switchInstance(tabId, origin, { skipCommittedCheck: true });
+        switchInstance(tabId, origin, {
+            skipCommittedCheck: true,
+            reason: "did not respond in time"
+        });
     }, NAV_TIMEOUT_MS);
 }
 
-async function switchInstance(tabId, origin, { skipCommittedCheck = false } = {}) {
+async function switchInstance(tabId, origin, { skipCommittedCheck = false, reason = "failed" } = {}) {
     const record = activeRedirects.get(tabId);
 
     // The breaker guards new X interceptions (onBeforeRequest) against a
@@ -619,9 +618,14 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false } = {}
     if (!next) {
         // Every configured instance has been tried for this navigation. Leave
         // the user where they are rather than looping.
+        console.log(
+            `[Twitter → Nitter] ${origin} ${reason}; every configured instance already tried for this navigation, leaving as-is.`
+        );
         activeRedirects.delete(tabId);
         return;
     }
+
+    console.log(`[Twitter → Nitter] ${origin} ${reason}; trying ${next}.`);
 
     record.tried.push(next);
     record.switching = false;
@@ -632,8 +636,96 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false } = {}
         .catch(() => {});
 }
 
-browser.webRequest.onCompleted.addListener(
+// A navigation can land on a configured Nitter instance without ever going
+// through our own X redirect: a search result, a bookmark, or a typed URL.
+// Track it the same way so a failure there gets the same automatic fallback,
+// but only when it arrived from outside Nitter -- if the user is already
+// browsing Nitter and clicks an internal link that fails, leave it alone
+// rather than hijacking navigation they're already in the middle of.
+browser.webRequest.onBeforeRequest.addListener(
     (details) => {
+        if (details.type !== "main_frame" || details.tabId < 0) {
+            return;
+        }
+
+        if (activeRedirects.has(details.tabId)) {
+            return;
+        }
+
+        const origin = originOf(details.url);
+
+        if (!origin) {
+            return;
+        }
+
+        if (details.originUrl && originOf(details.originUrl)) {
+            return;
+        }
+
+        let url;
+
+        try {
+            url = new URL(details.url);
+        } catch {
+            return;
+        }
+
+        activeRedirects.set(details.tabId, {
+            path: url.pathname + url.search,
+            tried: [origin],
+            timer: null,
+            switching: false
+        });
+        armWatchdog(details.tabId, origin);
+    },
+    { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
+);
+
+// Nitter renders its own instance-level failures (rate limit, no auth
+// tokens) into a generic ".error-panel" element -- the same one it uses for
+// "user not found" / "tweet not found", per Nitter's own renderError() in
+// src/views/general.nim. Presence alone can't tell those apart, so the
+// panel's own text is matched against known failure phrases; a plain
+// not-found message won't match and is correctly left alone (see
+// isHardFailure's 404 handling for the same principle).
+//
+// An operator's own shutdown page (e.g. a static "this instance is down"
+// notice) isn't rendered by Nitter at all -- confirmed live 2026-08-26 when
+// both nitter.tiekoetter.com and nitter.catsarch.com went down with their
+// own custom pages after X Corp's cease-and-desist against the upstream
+// Nitter project itself, using wording no fixed phrase list could have
+// anticipated. Checking for the *absence* of Nitter's own template markers
+// (the same ones the CI markup check already trusts) catches any such page
+// regardless of wording.
+//
+// That same absence-of-markers check would also misfire on a Cloudflare
+// interactive challenge page, which is a transient state that resolves into
+// a real Nitter page once solved (confirmed live 2026-08-26 -- an earlier
+// test succeeded after ~30s), not a failure. Its own well-known "Just a
+// moment..." title is checked first and explicitly excluded.
+//
+// Injected from check-page.js as a file, not an inline code string: some
+// pages (e.g. a Nitter operator's own custom shutdown page) serve a strict
+// CSP that blocks inline script injection outright, confirmed live
+// 2026-08-26 against nitter.catsarch.com's own shutdown page. A file-based
+// content script isn't subject to the page's CSP the same way.
+//
+// Only ever called for the tab's currently tracked attempt, never for
+// ordinary Nitter browsing outside one.
+async function pageShowsFailure(tabId) {
+    try {
+        const results = await browser.tabs.executeScript(tabId, {
+            file: "check-page.js"
+        });
+
+        return Boolean(results && results[0]);
+    } catch {
+        return false;
+    }
+}
+
+browser.webRequest.onCompleted.addListener(
+    async (details) => {
         if (details.type !== "main_frame") {
             return;
         }
@@ -661,15 +753,23 @@ browser.webRequest.onCompleted.addListener(
             recordLocal(origin, "BROKEN");
 
             if (isCurrent) {
-                console.log(
-                    `[Twitter → Nitter] ${origin} returned HTTP ${details.statusCode}; trying another instance.`
-                );
-                switchInstance(details.tabId, origin);
+                switchInstance(details.tabId, origin, {
+                    reason: `returned HTTP ${details.statusCode}`
+                });
             } else {
                 console.log(
                     `[Twitter → Nitter] ${origin} returned HTTP ${details.statusCode} for an attempt already superseded; ignoring.`
                 );
             }
+
+            return;
+        }
+
+        if (isCurrent && await pageShowsFailure(details.tabId)) {
+            recordLocal(origin, "BROKEN");
+            switchInstance(details.tabId, origin, {
+                reason: "rendered a soft failure page"
+            });
 
             return;
         }
@@ -705,10 +805,10 @@ browser.webRequest.onErrorOccurred.addListener(
         recordLocal(origin, "BROKEN");
 
         if (isCurrent) {
-            console.log(
-                `[Twitter → Nitter] ${origin} failed to load; trying another instance.`
-            );
-            switchInstance(details.tabId, origin, { skipCommittedCheck: true });
+            switchInstance(details.tabId, origin, {
+                skipCommittedCheck: true,
+                reason: "failed to load"
+            });
         } else {
             console.log(
                 `[Twitter → Nitter] ${origin} failed to load for an attempt already superseded; ignoring.`

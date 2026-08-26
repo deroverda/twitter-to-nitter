@@ -46,6 +46,8 @@ Other behaviour:
 - Treats a 404 as a legitimate Nitter answer, not a broken instance
 - Remembers instances that failed for you and demotes them for a while
 - Stops redirecting a tab briefly if it detects a redirect loop
+- Also falls back automatically if you land on a configured Nitter instance directly - a search result, a bookmark, a typed URL - and it fails, not just when the extension redirected you there itself. Clicking a link while already browsing Nitter is left alone rather than hijacked mid-navigation.
+- Also falls back when an instance answers with a normal HTTP 200 page that is itself an error - a rate limit, exhausted auth tokens, or the instance's own shutdown notice - by checking the loaded page: if it doesn't look like a Nitter page at all (an operator's own custom down-page, regardless of wording), or if Nitter's own error panel names a known instance-level failure, that counts as a failure. A plain "not found" result, or a Cloudflare human-verification page that's still resolving, does not. This only runs on a navigation the extension is actively deciding the outcome of, never on ordinary Nitter browsing.
 
 ## Instances
 
@@ -53,13 +55,13 @@ Configured in `background.js`:
 
 - ~~nitter.net~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
 - ~~xcancel.com~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
-- nitter.catsarch.com
+- nitter.catsarch.com (self-reported down as of 2026-08-26, operator describes it as precautionary and not necessarily permanent - left configured rather than disabled, unlike the entries above, since the extension's own fallback already handles this automatically and there's a real chance it comes back)
 - ~~lightbrd.com~~ (disabled 2026-08-25: doesn't proxy images/video/GIFs and loads Microsoft Clarity analytics, per [zedeus/nitter#1209](https://github.com/zedeus/nitter/issues/1209))
 - nitter.kareem.one
 
 The list is hardcoded and only changes when a new version is released. If every configured instance is unhealthy, the extension still sends you to the least-bad one rather than to X - redirecting to Nitter is the whole point. A daily CI check compares the shipped list against the health service and verifies that each instance still serves real Nitter markup.
 
-**The public Nitter fleet is currently under pressure.** In the same week (2026-08-24), X Corp sent cease-and-desist letters to at least two instance operators, and upstream Nitter development itself is paused. This extension only has two active instances configured as of this release. If you rely on this daily, keep an eye on the [instance health service](https://status.d420.de/) or this repo's releases for updates - the fleet could shrink further, or a fixed instance list may not reflect reality between releases.
+**The public Nitter fleet is currently under serious pressure.** On 2026-08-24, X Corp sent cease-and-desist letters demanding takedown of Nitter instances and of the [upstream project itself](https://github.com/zedeus/nitter) - the repository is now archived. Several instance operators have since shut down, including one of the two active instances below, whose operator described it as a precaution pending more legal clarity, not necessarily permanent (see [zedeus/nitter#1442](https://github.com/zedeus/nitter/issues/1442) for the broader thread). This extension's own fallback logic handles a down instance automatically, but if every configured instance is down at once, you will simply see a broken page - that's expected right now, not a bug. If you rely on this daily, keep an eye on the [instance health service](https://status.d420.de/) or this repo's releases for updates.
 
 If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entries in `manifest.json` only takes effect for regular users after you bump the version, re-sign, and publish a new `.xpi`.
 
@@ -99,6 +101,7 @@ No telemetry, no analytics, no tracking, no backend of ours.
 - **Your URL goes to one Nitter instance at a time** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. If that instance fails, the extension falls back to another configured instance, so the same path may reach more than one instance sequentially over the course of one navigation - never simultaneously, and never to more than the instances listed above.
 - **The health service receives no browsing data.** The extension requests one fixed URL with no parameters and no cookies, on a timer, identical for every user and unrelated to what you browse. It is never contacted as part of a navigation.
 - **The extension sends no probe traffic to Nitter instances.** Instance health is learned from pages you loaded anyway.
+- **The extension checks the loaded page for a small set of structural signals: whether it looks like a genuine Nitter page at all, and if so, whether Nitter's own error panel names a known instance-level failure.** This runs only on a navigation the extension is actively deciding the outcome of. The rest of the page - what you searched for, whose profile you viewed, the actual tweet content - is never read, stored, or sent anywhere; the check only ever produces a true/false result kept in memory for that one decision.
 - Instance health and ranking are stored locally and never leave your browser.
 
 One thing this extension cannot do anything about: **some Nitter instances do not proxy media.** On those, your browser loads images and video directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), which means Twitter-owned infrastructure still sees which profile and media you viewed. Whether media is proxied is the instance operator's choice, not something a redirector can change. If that matters to you, prefer an instance with proxying enabled, or run your own.
@@ -112,4 +115,4 @@ One thing this extension cannot do anything about: **some Nitter instances do no
 
 ## No dependencies
 
-Just `manifest.json` and `background.js`. No build step, no npm packages, no framework.
+Just `manifest.json`, `background.js`, and `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection). No build step, no npm packages, no framework.
