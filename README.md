@@ -17,7 +17,7 @@ A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working N
 The request to X is **intercepted before it leaves your browser**. You never watch X load first, and X never receives the navigation.
 
 > [!WARNING]
-> On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter) - the repository is now archived. Most public instances have since shut down; this extension is down to 2 configured instances, both showing real instability. See [Instances](#instances) below and [zedeus/nitter#1442](https://github.com/zedeus/nitter/issues/1442) for the live situation. The extension's own fallback logic handles a down instance automatically, but if the whole fleet is down, you'll simply see a broken page.
+> On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter) - the repository is now archived. Most public instances have since shut down; this extension is down to 2 configured instances, both showing real instability. See [Instances](#instances) below, [zedeus/nitter#1442](https://github.com/zedeus/nitter/issues/1442), and [discussion on Hacker News](https://news.ycombinator.com/item?id=49437283) for the live situation. The extension's own fallback logic handles a down instance automatically, but if the whole fleet is down, you'll simply see a broken page.
 
 > **Firefox Add-ons (AMO):** A public listing isn't planned while the fleet is this unstable - revisit if/when Nitter recovers. Releases in the meantime are private, unlisted signed builds (see Install below).
 
