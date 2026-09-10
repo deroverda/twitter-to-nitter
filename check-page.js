@@ -28,8 +28,9 @@
 
     // 2. Only an HTML document can be a Nitter page. RSS, JSON and plain-text
     //    are legitimate instance responses (Nitter serves RSS at /<user>/rss)
-    //    and must never be judged by markup.
-    if (!(document.documentElement instanceof HTMLHtmlElement)) {
+    //    and must never be judged by markup. An HTML root is an HTMLElement;
+    //    an XML root (e.g. <rss>) is a plain Element.
+    if (!(document.documentElement instanceof HTMLElement)) {
         return false;
     }
 

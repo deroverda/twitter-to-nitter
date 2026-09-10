@@ -8,5 +8,10 @@ module.exports = {
     ".web-extignore",
     "chatgptreview.md",
     "web-ext-config.cjs",
+    "package.json",
+    "package-lock.json",
+    "test",
+    "test/**/*",
+    "other project instances.md",
   ],
 };

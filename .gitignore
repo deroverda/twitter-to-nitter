@@ -1,4 +1,5 @@
 web-ext-artifacts/
+node_modules/
 .amo-upload-uuid
 HANDOFF.md
 CLAUDE.md

@@ -94,7 +94,7 @@ Current releases are privately signed "unlisted" builds made via [`web-ext sign`
 ## Permissions, and why each is needed
 
 - `webRequest` + `webRequestBlocking` - to intercept the X/Twitter request and redirect it **before it is sent**, and to see the HTTP status of the Nitter page you land on
-- Host access to `x.com` and `twitter.com` (plus their `www.` and `mobile.` forms) - required to intercept those requests at all
+- Host access to `x.com` and `twitter.com` (plus their `www.`, `mobile.` and `m.` forms) - required to intercept those requests at all
 - Host access to each Nitter instance in the permitted superset (see [Instances](#instances)) - required to redirect to them and read the response status. This is a fixed list in `manifest.json`; the health service selects which of them are active but cannot add to it
 - Host access to `status.d420.de/api/*` - to fetch the fleet health data (see [Instances](#instances)); no other path on that domain is requested
 - `storage` - to remember the cached ranking and which instances failed for you

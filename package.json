@@ -1,0 +1,12 @@
+{
+  "name": "twitter-to-nitter",
+  "version": "1.5.0",
+  "private": true,
+  "description": "Test harness for the Twitter/X to Nitter extension. Not shipped in the .xpi.",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.0"
+  }
+}

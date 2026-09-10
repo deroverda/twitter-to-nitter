@@ -97,18 +97,22 @@ const TWITTER_HOSTS = new Set([
     "twitter.com",
     "www.twitter.com",
     "mobile.twitter.com",
+    "m.twitter.com",
     "x.com",
     "www.x.com",
-    "mobile.x.com"
+    "mobile.x.com",
+    "m.x.com"
 ]);
 
 const TWITTER_URL_PATTERNS = [
     "*://twitter.com/*",
     "*://www.twitter.com/*",
     "*://mobile.twitter.com/*",
+    "*://m.twitter.com/*",
     "*://x.com/*",
     "*://www.x.com/*",
-    "*://mobile.x.com/*"
+    "*://mobile.x.com/*",
+    "*://m.x.com/*"
 ];
 
 // Covers every instance the extension could ever redirect to, so the outcome
@@ -197,12 +201,21 @@ function domainOf(origin) {
     return new URL(origin).hostname;
 }
 
-function statusFor(origin) {
-    if (!statusHosts) {
-        return null;
+// The status data is trusted only while it is fresher than STATUS_STALE_MS.
+// Past that -- the service has been unreachable for hours -- fall back to the
+// seed list rather than keep promoting or ranking instances on stale data.
+function freshStatusHosts() {
+    if (statusHosts && (Date.now() - statusFetchedAt) < STATUS_STALE_MS) {
+        return statusHosts;
     }
 
-    return statusHosts[domainOf(origin)] || null;
+    return null;
+}
+
+function statusFor(origin) {
+    const hosts = freshStatusHosts();
+
+    return hosts ? (hosts[domainOf(origin)] || null) : null;
 }
 
 // Seed list, plus every status-service instance currently healthy and
@@ -210,9 +223,10 @@ function statusFor(origin) {
 // adds and drops instances live within the manifest-permitted set.
 function candidateOrigins() {
     const origins = new Set(SEED_INSTANCES);
+    const hosts = freshStatusHosts();
 
-    if (statusHosts) {
-        for (const [domain, info] of Object.entries(statusHosts)) {
+    if (hosts) {
+        for (const [domain, info] of Object.entries(hosts)) {
             if (info.healthy && PERMITTED_DOMAINS.has(domain)) {
                 origins.add("https://" + domain);
             }
@@ -374,10 +388,14 @@ async function refreshStatus() {
 // ============================================================
 
 function recordLocal(origin, state) {
-    localHealth[origin] = {
-        state: state,
-        at: Date.now()
-    };
+    // Only a BROKEN entry carries information (locallyBroken reads nothing
+    // else). Recording OK just means "no longer known broken", so drop the
+    // entry rather than let cleared failures pile up in storage.
+    if (state === "BROKEN") {
+        localHealth[origin] = { state: state, at: Date.now() };
+    } else {
+        delete localHealth[origin];
+    }
 
     recomputeRanking();
 
@@ -574,6 +592,19 @@ function originOf(rawUrl) {
     }
 }
 
+// True when a webRequest event belongs to the attempt currently tracked for
+// its tab: same landing origin, and -- once we have captured it -- the same
+// underlying request. The requestId check stops a stale event from a
+// superseded request to the same instance (e.g. a second fast X navigation
+// that happened to pick the same instance) from being taken for the live one.
+function sameAttempt(record, origin, requestId) {
+    return Boolean(
+        record &&
+        record.currentOrigin === origin &&
+        (record.requestId === undefined || record.requestId === requestId)
+    );
+}
+
 function clearWatchdog(tabId) {
     const record = activeRedirects.get(tabId);
 
@@ -754,25 +785,44 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
         .catch(() => {});
 }
 
-// A navigation can land on a configured Nitter instance without ever going
-// through our own X redirect: a search result, a bookmark, or a typed URL.
-// Track it the same way so a failure there gets the same automatic fallback,
-// but only when it arrived from outside Nitter -- if the user is already
-// browsing Nitter and clicks an internal link that fails, leave it alone
-// rather than hijacking navigation they're already in the middle of.
+// Fires for every main_frame request to a permitted instance. Two jobs:
+//
+// 1. If an attempt is already in flight for this tab, this request is part of
+//    it -- our own fallback redirect landing, the instance redirecting itself
+//    (/i/web/status -> /i/status), or a hop to another permitted instance
+//    ("this instance has moved"). Follow it: keep the attempt live on wherever
+//    it actually went, add that origin to the tried set so a later failure
+//    doesn't bounce back to it, re-arm the watchdog, and record the real
+//    request id. Without this, a cross-origin hop leaves the watchdog pinned
+//    to the original origin and it fires 8s later, yanking the user off a page
+//    that already loaded fine.
+//
+// 2. Otherwise the user navigated straight to an instance (a search result, a
+//    bookmark, a typed URL). Track it so a failure there gets the same
+//    fallback -- but not when it came from Nitter itself, i.e. an internal
+//    link the user is already following.
 browser.webRequest.onBeforeRequest.addListener(
     (details) => {
         if (details.type !== "main_frame" || details.tabId < 0) {
             return;
         }
 
-        if (activeRedirects.has(details.tabId)) {
-            return;
-        }
-
         const origin = originOf(details.url);
 
         if (!origin) {
+            return;
+        }
+
+        const record = activeRedirects.get(details.tabId);
+
+        if (record) {
+            record.requestId = details.requestId;
+
+            if (!record.tried.includes(origin)) {
+                record.tried.push(origin);
+            }
+
+            armWatchdog(details.tabId, origin);
             return;
         }
 
@@ -792,7 +842,8 @@ browser.webRequest.onBeforeRequest.addListener(
             path: url.pathname + url.search,
             tried: [origin],
             timer: null,
-            switching: false
+            switching: false,
+            requestId: details.requestId
         });
         armWatchdog(details.tabId, origin);
     },
@@ -847,7 +898,7 @@ browser.webRequest.onCompleted.addListener(
         // state-machine actions (watchdog, fallback, record deletion) are
         // restricted to the attempt currently being tracked.
         const record = activeRedirects.get(details.tabId);
-        const isCurrent = Boolean(record && record.currentOrigin === origin);
+        const isCurrent = sameAttempt(record, origin, details.requestId);
 
         if (isCurrent) {
             clearWatchdog(details.tabId);
@@ -870,17 +921,23 @@ browser.webRequest.onCompleted.addListener(
         }
 
         if (isCurrent && await pageShowsFailure(details.tabId)) {
-            recordLocal(origin, "BROKEN");
-            switchInstance(details.tabId, origin, {
-                reason: "rendered a soft failure page"
-            });
+            // executeScript above is async: the tab may have navigated during
+            // it, in which case check-page.js ran against a different document
+            // and its verdict is not about this instance. Re-confirm before
+            // acting on it.
+            if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
+                recordLocal(origin, "BROKEN");
+                switchInstance(details.tabId, origin, {
+                    reason: "rendered a soft failure page"
+                });
+            }
 
             return;
         }
 
         recordLocal(origin, "OK");
 
-        if (isCurrent) {
+        if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
             activeRedirects.delete(details.tabId);
         }
     },
@@ -900,7 +957,7 @@ browser.webRequest.onErrorOccurred.addListener(
         }
 
         const record = activeRedirects.get(details.tabId);
-        const isCurrent = Boolean(record && record.currentOrigin === origin);
+        const isCurrent = sameAttempt(record, origin, details.requestId);
 
         // NS_BINDING_ABORTED means the load was cancelled, not that the
         // instance failed: the user pressed Stop, or started a new navigation
