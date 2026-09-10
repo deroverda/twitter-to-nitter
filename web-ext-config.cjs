@@ -1,17 +1,14 @@
 module.exports = {
   ignoreFiles: [
-    "HANDOFF.md",
-    "CLAUDE.md",
-    "README.md",
+    "*.md",
+    "**/*.md",
     "logo.png",
     "icon-source.png",
     ".web-extignore",
-    "chatgptreview.md",
     "web-ext-config.cjs",
     "package.json",
     "package-lock.json",
     "test",
     "test/**/*",
-    "other project instances.md",
   ],
 };

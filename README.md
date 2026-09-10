@@ -123,6 +123,8 @@ One thing this extension cannot do anything about: **some Nitter instances do no
 - On instances that do not proxy media, media still loads from Twitter's CDN. See Privacy above.
 - `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, and `/privacy` stay on X, because Nitter has no equivalent for them.
 
-## No dependencies
+## No runtime dependencies
 
-Just `manifest.json`, `background.js`, and `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection). No build step, no npm packages, no framework.
+What ships is just `manifest.json`, `background.js`, and `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection). No build step, no framework, nothing bundled.
+
+The repo also has a `test/` harness that runs on `node --test` (`npm test`), with one dev-only dependency (`linkedom`) for parsing HTML fixtures. It is not part of the extension and is excluded from the packaged `.xpi`.
