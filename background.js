@@ -785,22 +785,18 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
         .catch(() => {});
 }
 
-// Fires for every main_frame request to a permitted instance. Two jobs:
+// Fires for every main_frame request to a permitted instance.
 //
-// 1. If an attempt is already in flight for this tab, this request is part of
-//    it -- our own fallback redirect landing, the instance redirecting itself
-//    (/i/web/status -> /i/status), or a hop to another permitted instance
-//    ("this instance has moved"). Follow it: keep the attempt live on wherever
-//    it actually went, add that origin to the tried set so a later failure
-//    doesn't bounce back to it, re-arm the watchdog, and record the real
-//    request id. Without this, a cross-origin hop leaves the watchdog pinned
-//    to the original origin and it fires 8s later, yanking the user off a page
-//    that already loaded fine.
+// If an attempt is already in flight for this tab, this request continues it:
+// our own fallback redirect, an instance's self-redirect (/i/web/status ->
+// /i/status), or a hop to another permitted instance. Follow it -- move
+// currentOrigin, add it to tried, re-arm the watchdog, record the real request
+// id. Without this a cross-origin hop leaves the watchdog pinned to the old
+// origin, so it fires 8s later and yanks the user off a page that loaded fine.
 //
-// 2. Otherwise the user navigated straight to an instance (a search result, a
-//    bookmark, a typed URL). Track it so a failure there gets the same
-//    fallback -- but not when it came from Nitter itself, i.e. an internal
-//    link the user is already following.
+// Otherwise the user navigated straight to an instance (search result,
+// bookmark, typed URL); track it for the same fallback, unless it came from
+// Nitter itself (an internal link mid-browse).
 browser.webRequest.onBeforeRequest.addListener(
     (details) => {
         if (details.type !== "main_frame" || details.tabId < 0) {

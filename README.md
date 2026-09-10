@@ -26,7 +26,7 @@ The request to X is **intercepted before it leaves your browser**. You never wat
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
-    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check if it's rate limited, blocked, or unreachable, retry or stay">
+    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check whether it is rate limited, blocked, unreachable, or an error page, then retry or stay">
   </picture>
 </p>
 
@@ -99,7 +99,7 @@ Current releases are privately signed "unlisted" builds made via [`web-ext sign`
 - Host access to `status.d420.de/api/*` - to fetch the fleet health data (see [Instances](#instances)); no other path on that domain is requested
 - `storage` - to remember the cached ranking and which instances failed for you
 
-**Why the X host permission is worth it.** An earlier version avoided it, and the cost was that X still received your request while the extension decided where to send you. Intercepting properly is what makes the guarantee real: with these permissions, **X is never contacted at all**. The permission buys the privacy, it doesn't spend it.
+**Why the X host permission is worth it.** An earlier version avoided it, and the cost was that X still received your request while the extension decided where to send you. Blocking the request needs host permission for the domain being blocked, so these permissions are what let the extension intercept before anything is sent. With them, X is not contacted.
 
 No `<all_urls>`. No access to any site other than X/Twitter and the Nitter instances listed in `manifest.json`.
 
@@ -114,7 +114,7 @@ No telemetry, no analytics, no tracking, no backend of ours.
 - **The extension checks the loaded page for a small set of structural signals: whether it looks like a genuine Nitter page at all, and if so, whether Nitter's own error panel names a known instance-level failure.** This runs only on a navigation the extension is actively deciding the outcome of. The rest of the page - what you searched for, whose profile you viewed, the actual tweet content - is never read, stored, or sent anywhere; the check only ever produces a true/false result kept in memory for that one decision.
 - Instance health and ranking are stored locally and never leave your browser.
 
-One thing this extension cannot do anything about: **some Nitter instances do not proxy media.** On those, your browser loads images and video directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), which means Twitter-owned infrastructure still sees which profile and media you viewed. Whether media is proxied is the instance operator's choice, not something a redirector can change. If that matters to you, prefer an instance with proxying enabled, or run your own.
+One limitation is outside this extension's control: some Nitter instances do not proxy media. On those, your browser loads images and video directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), so Twitter-owned infrastructure still sees which profile and media you viewed. Whether media is proxied is the instance operator's choice, not something a redirector can change. If that matters to you, prefer an instance with proxying enabled, or run your own.
 
 ## Known limitations
 
