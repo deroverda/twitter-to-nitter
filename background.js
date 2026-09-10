@@ -25,6 +25,8 @@
 // Configuration
 // ============================================================
 
+const STATUS_API = "https://status.d420.de/api/v1/instances";
+
 // Cold-start and offline fallback list, and the ranking floor. Used verbatim
 // until the status service responds, and whenever it is unreachable or stale.
 // The live active list (see candidateOrigins) is this plus any status-service
@@ -49,12 +51,22 @@ const SEED_INSTANCES = [
 
 // Every https origin the manifest grants host access to, minus the status
 // service itself. The status service can promote any of these into the active
-// list once it reports the instance healthy, and drop it when it doesn't; it
-// can never introduce an origin the manifest has not already permitted,
-// because a blocking redirect requires a static host permission for its target.
+// list once it reports the instance healthy, and drop it when it doesn't.
+//
+// It cannot introduce an origin outside this set: parseStatus() discards any
+// host not in PERMITTED_DOMAINS, and candidateOrigins() intersects again at
+// use. Firefox does NOT gate redirectUrl targets by host permission, so that
+// filter -- not the platform -- is what confines the service to the manifest
+// superset. The host permissions are still required, but for observing the
+// outcome of a redirect (onCompleted / onErrorOccurred / executeScript) on
+// the target instance; without them the fallback logic would go blind.
+//
+// Only the strict "https://host/*" permission shape is accepted. A
+// path-scoped grant ("https://host/path/*") would otherwise collapse to the
+// whole origin here and over-broaden originOf().
 const PERMITTED_ORIGINS = new Set(
     (browser.runtime.getManifest().permissions || [])
-        .filter(perm => /^https:\/\//.test(perm))
+        .filter(perm => /^https:\/\/[^/]+\/\*$/.test(perm))
         .map(perm => {
             try {
                 return new URL(perm.replace(/\/\*$/, "")).origin;
@@ -62,12 +74,24 @@ const PERMITTED_ORIGINS = new Set(
                 return null;
             }
         })
-        .filter(origin => origin && origin !== "https://status.d420.de")
+        .filter(origin => origin && origin !== new URL(STATUS_API).origin)
 );
 
 const PERMITTED_DOMAINS = new Set(
     Array.from(PERMITTED_ORIGINS, origin => new URL(origin).hostname)
 );
+
+// The status filter above is the only thing keeping the service inside the
+// manifest superset. Fail loudly if the shipped seed list ever drifts outside
+// what the manifest permits (CI checks this too, but not at runtime).
+for (const seed of SEED_INSTANCES) {
+    if (!PERMITTED_ORIGINS.has(seed)) {
+        console.error(
+            `[Twitter → Nitter] seed instance ${seed} has no matching host permission; ` +
+            "fallback observation will not work for it."
+        );
+    }
+}
 
 const TWITTER_HOSTS = new Set([
     "twitter.com",
@@ -111,8 +135,6 @@ const UNSUPPORTED_PREFIXES = [
 // Canonical status permalinks under /i/ that Nitter does serve. Nitter itself
 // redirects /i/web/status/<id> to /i/status/<id>, so both are passed through.
 const SUPPORTED_I_PATH = /^\/i\/(web\/)?status\/\d+/;
-
-const STATUS_API = "https://status.d420.de/api/v1/instances";
 
 // The service updates every 900s; polling faster than that gets rate limited.
 const STATUS_REFRESH_MS = 15 * 60 * 1000;
@@ -571,7 +593,56 @@ function armWatchdog(tabId, origin) {
     clearWatchdog(tabId);
     record.currentOrigin = origin;
 
-    record.timer = setTimeout(() => {
+    record.timer = setTimeout(async () => {
+        // Liveness check before treating this as an instance failure. The
+        // watchdog is only cleared by an outcome event for this origin, a new
+        // X interception, or tab removal -- so if the user navigates the tab
+        // away mid-load, nothing else stops this timer from firing and yanking
+        // them back to a Nitter page. tab.url is readable for permitted
+        // origins and x.com (host permissions) and undefined for anything
+        // else; tab.status is always readable.
+        let tabMovedAway = false;
+
+        try {
+            const tab = await browser.tabs.get(tabId);
+            const tabUrl = tab && tab.url;
+            let tabOrigin = null;
+
+            if (tabUrl) {
+                try {
+                    tabOrigin = new URL(tabUrl).origin;
+                } catch {
+                    tabOrigin = null;
+                }
+            }
+
+            // No readable URL: the tab is on an unpermitted site, i.e. the
+            // user navigated away. Or: finished loading a *different permitted
+            // instance* than the one we are waiting on (a redirect chain or a
+            // manual navigation landed there). A genuine slow load still reads
+            // as status "loading" showing the pre-redirect page -- often
+            // about:blank, whose origin is not in PERMITTED_ORIGINS -- so this
+            // only catches real departures.
+            tabMovedAway = !tabUrl ||
+                (tab.status === "complete" && PERMITTED_ORIGINS.has(tabOrigin) && tabOrigin !== origin);
+        } catch {
+            // Tab gone.
+            tabMovedAway = true;
+        }
+
+        // A new attempt (re-arm, or a fresh X interception) may have replaced
+        // this record while tabs.get was in flight. If so, it is not ours to
+        // touch.
+        if (activeRedirects.get(tabId) !== record || record.currentOrigin !== origin) {
+            return;
+        }
+
+        if (tabMovedAway) {
+            clearWatchdog(tabId);
+            activeRedirects.delete(tabId);
+            return;
+        }
+
         recordLocal(origin, "BROKEN");
         switchInstance(tabId, origin, {
             skipCommittedCheck: true,
@@ -728,28 +799,14 @@ browser.webRequest.onBeforeRequest.addListener(
     { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
 );
 
-// Nitter renders its own instance-level failures (rate limit, no auth
-// tokens) into a generic ".error-panel" element -- the same one it uses for
-// "user not found" / "tweet not found", per Nitter's own renderError() in
-// src/views/general.nim. Presence alone can't tell those apart, so the
-// panel's own text is matched against known failure phrases; a plain
-// not-found message won't match and is correctly left alone (see
-// isHardFailure's 404 handling for the same principle).
-//
-// An operator's own shutdown page (e.g. a static "this instance is down"
-// notice) isn't rendered by Nitter at all -- confirmed live 2026-08-26 when
-// both nitter.tiekoetter.com and nitter.catsarch.com went down with their
-// own custom pages after X Corp's cease-and-desist against the upstream
-// Nitter project itself, using wording no fixed phrase list could have
-// anticipated. Checking for the *absence* of Nitter's own template markers
-// (the same ones the CI markup check already trusts) catches any such page
-// regardless of wording.
-//
-// That same absence-of-markers check would also misfire on a Cloudflare
-// interactive challenge page, which is a transient state that resolves into
-// a real Nitter page once solved (confirmed live 2026-08-26 -- an earlier
-// test succeeded after ~30s), not a failure. Its own well-known "Just a
-// moment..." title is checked first and explicitly excluded.
+// Decides whether the loaded page is an instance-level failure to fall away
+// from. The full logic (and why each branch exists) lives in check-page.js;
+// in short it ignores still-resolving anti-bot challenge pages and non-HTML
+// responses, treats a page with no rendered content plus a known failure
+// phrase as a failure (covering forks that don't use Nitter's .error-panel),
+// matches .error-panel text against those phrases (so a plain "not found" is
+// left alone), and treats anything that doesn't render as Nitter at all as a
+// failure (an operator's own shutdown page, whatever its wording).
 //
 // Injected from check-page.js as a file, not an inline code string: some
 // pages (e.g. a Nitter operator's own custom shutdown page) serve a strict
@@ -844,6 +901,20 @@ browser.webRequest.onErrorOccurred.addListener(
 
         const record = activeRedirects.get(details.tabId);
         const isCurrent = Boolean(record && record.currentOrigin === origin);
+
+        // NS_BINDING_ABORTED means the load was cancelled, not that the
+        // instance failed: the user pressed Stop, or started a new navigation
+        // before this one finished. Treating it as a failure both demotes a
+        // healthy instance and can force the tab back onto a Nitter page the
+        // user was navigating away from. Just end the attempt.
+        if (details.error === "NS_BINDING_ABORTED") {
+            if (isCurrent) {
+                clearWatchdog(details.tabId);
+                activeRedirects.delete(details.tabId);
+            }
+
+            return;
+        }
 
         if (isCurrent) {
             clearWatchdog(details.tabId);

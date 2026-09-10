@@ -67,7 +67,7 @@ The extension redirects to any instance the [health service](https://status.d420
 - shitter.thepixora.com
 - xcancel.com
 
-**Permitted superset** (host permissions in `manifest.json`) - the seed list plus `nitter.xitter.cc`. The health service can activate or drop any of these live between releases; it can never introduce a domain outside this set, because a blocking redirect needs a static host permission for its target.
+**Permitted superset** (host permissions in `manifest.json`) - the seed list plus `nitter.xitter.cc`. The health service can activate or deprioritise any of these live between releases. It cannot introduce a domain outside this set: the extension discards any host from the health data that the manifest does not already list, and re-checks at the point of use. (Firefox itself does not restrict redirect targets - that check is done in the extension's own code.) Seed instances are never fully dropped, only pushed down the ranking when the service marks them unhealthy.
 
 `lightbrd.com` stays excluded regardless of uptime: it doesn't proxy images/video/GIFs and loads Microsoft Clarity analytics, per [zedeus/nitter#1209](https://github.com/zedeus/nitter/issues/1209).
 
@@ -107,7 +107,7 @@ No `<all_urls>`. No access to any site other than X/Twitter and the Nitter insta
 
 No telemetry, no analytics, no tracking, no backend of ours.
 
-- **X never receives your request.** It is redirected inside your browser before it is sent, so X does not learn that you clicked.
+- **X never receives your request**, with three narrow exceptions. In normal use the request to `x.com` / `twitter.com` is redirected inside your browser before it is sent, so X does not learn that you clicked. The exceptions: the paths listed under Known limitations stay on X by design; if the extension detects a redirect loop it stops intercepting that tab briefly as a safety valve, and the request then reaches X; and a `t.co` short link (Twitter's own URL shortener) is not intercepted, so `t.co` sees the click before the real `x.com` request that follows is redirected.
 - **Your URL goes to one Nitter instance at a time** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. If that instance fails, the extension falls back to another permitted instance, so the same path may reach more than one instance sequentially over the course of one navigation - never simultaneously, and never to any domain outside the permitted superset listed above.
 - **The health service receives no browsing data.** The extension requests one fixed URL with no parameters and no cookies, on a timer, identical for every user and unrelated to what you browse. It is never contacted as part of a navigation.
 - **The extension sends no probe traffic to Nitter instances.** Instance health is learned from pages you loaded anyway.
