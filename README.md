@@ -16,10 +16,10 @@ A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working N
 
 The request to X is **intercepted before it leaves your browser**. You never watch X load first, and X never receives the navigation.
 
-> [!WARNING]
-> On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter) - the repository is now archived. Most public instances have since shut down; this extension is down to 2 configured instances, both showing real instability. See [Instances](#instances) below, [zedeus/nitter#1442](https://github.com/zedeus/nitter/issues/1442), and [discussion on Hacker News](https://news.ycombinator.com/item?id=49437283) for the live situation. The extension's own fallback logic handles a down instance automatically, but if the whole fleet is down, you'll simply see a broken page.
+> [!NOTE]
+> **August 2026 cease-and-desist, and the September recovery.** On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter), and most public instances shut down. In early September 2026, after legal advice, upstream development resumed ("Nitter lives") and instances began coming back. This extension now tracks the [live instance health service](https://status.d420.de/) directly, activating and dropping instances as the fleet moves (see [Instances](#instances)). The fleet is still smaller and less stable than before the C&D; if every instance it can reach is down, you'll see a broken page rather than X.
 
-> **Firefox Add-ons (AMO):** A public listing isn't planned while the fleet is this unstable - revisit if/when Nitter recovers. Releases in the meantime are private, unlisted signed builds (see Install below).
+> **Firefox Add-ons (AMO):** No public listing planned for now. Releases are private, unlisted signed builds (see Install below).
 
 ## What it does
 
@@ -36,10 +36,10 @@ When you open an X/Twitter link:
 2. Which instance you get is decided from a locally cached ranking, refreshed in the background.
 3. If that instance turns out to be unusable for you - rate limited, blocked, unreachable - the extension notices and moves you to the next candidate.
 
-Instance ranking comes from two independent sources:
+The candidate list itself is driven by two independent sources:
 
-- **Fleet health** from the [Nitter Instance Health](https://status.d420.de/) service, polled about every 15 minutes in the background and cached locally. Its API exists to serve redirectors like this one.
-- **Your own results.** The outcome of the pages you actually load is the only instance data specific to your network, and it takes priority. The extension sends no probe traffic of its own to public Nitter instances.
+- **Fleet health** from the [Nitter Instance Health](https://status.d420.de/) service, polled about every 15 minutes in the background and cached locally. Its API exists to serve redirectors like this one. The extension activates any instance the service reports healthy, and drops it when the service does - but only within the set of domains the extension already has host permission for (see [Permissions](#permissions-and-why-each-is-needed)). A brand-new domain still needs a release to grant that permission. A small seed list is baked in for cold start and for when the service is unreachable.
+- **Your own results.** The outcome of the pages you actually load is the only instance data specific to your network, and it takes priority over the service's view. The extension sends no probe traffic of its own to public Nitter instances.
 
 Other behaviour:
 
@@ -54,19 +54,26 @@ Other behaviour:
 
 ## Instances
 
-Configured in `background.js`:
+The extension redirects to any instance the [health service](https://status.d420.de/) currently reports healthy, as long as `manifest.json` already grants host permission for that domain. Two lists in the source define the bounds:
 
-- ~~nitter.net~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
-- ~~xcancel.com~~ (disabled, operator received a cease-and-desist from X Corp. and shut it down as of 2026-08-24)
-- nitter.catsarch.com (self-reported down as of 2026-08-26, operator describes it as precautionary and not necessarily permanent - left configured rather than disabled, unlike the entries above, since the extension's own fallback already handles this automatically and there's a real chance it comes back)
-- ~~lightbrd.com~~ (disabled 2026-08-25: doesn't proxy images/video/GIFs and loads Microsoft Clarity analytics, per [zedeus/nitter#1209](https://github.com/zedeus/nitter/issues/1209))
+**Seed list** (`SEED_INSTANCES` in `background.js`) - used at startup and whenever the health service is unreachable or stale:
+
 - nitter.kareem.one
+- nitter.jaydenha.uk
+- nitter.click
+- nitter.meowing.monster
+- nitter.netbub.com
+- nitter.miningtcup.me
+- shitter.thepixora.com
+- xcancel.com
 
-The list is hardcoded and only changes when a new version is released. If every configured instance is unhealthy, the extension still sends you to the least-bad one rather than to X - redirecting to Nitter is the whole point. A daily CI check compares the shipped list against the health service and verifies that each instance still serves real Nitter markup.
+**Permitted superset** (host permissions in `manifest.json`) - the seed list plus `nitter.xitter.cc`. The health service can activate or drop any of these live between releases; it can never introduce a domain outside this set, because a blocking redirect needs a static host permission for its target.
 
-See the notice at the top of this README for the broader situation. If you rely on this daily, keep an eye on the [instance health service](https://status.d420.de/) or this repo's releases for updates - the fleet could shrink further, or a fixed instance list may not reflect reality between releases.
+`lightbrd.com` stays excluded regardless of uptime: it doesn't proxy images/video/GIFs and loads Microsoft Clarity analytics, per [zedeus/nitter#1209](https://github.com/zedeus/nitter/issues/1209).
 
-If you're maintaining a fork: editing `NITTER_INSTANCES` in `background.js` and the matching host entries in `manifest.json` only takes effect for regular users after you bump the version, re-sign, and publish a new `.xpi`.
+If every reachable instance is unhealthy, the extension still sends you to the least-bad one rather than to X - redirecting to Nitter is the whole point. A daily CI check reports the seed list and the permitted superset against the health service, flags any healthy instance not yet permitted (those need a release), and verifies that each seed instance still serves real Nitter markup.
+
+If you're maintaining a fork: adding a genuinely new domain means editing both `SEED_INSTANCES` in `background.js` and the host permissions in `manifest.json`, then bumping the version, re-signing, and publishing a new `.xpi`. Instances already in the permitted superset need no release to come and go - the health service drives that.
 
 ## Install
 
@@ -88,20 +95,20 @@ Current releases are privately signed "unlisted" builds made via [`web-ext sign`
 
 - `webRequest` + `webRequestBlocking` - to intercept the X/Twitter request and redirect it **before it is sent**, and to see the HTTP status of the Nitter page you land on
 - Host access to `x.com` and `twitter.com` (plus their `www.` and `mobile.` forms) - required to intercept those requests at all
-- Host access to each configured Nitter instance - required to redirect to them and read the response status
-- Host access to `status.d420.de/api/*` - to fetch the fleet health ranking (see Instances above); no other path on that domain is requested
+- Host access to each Nitter instance in the permitted superset (see [Instances](#instances)) - required to redirect to them and read the response status. This is a fixed list in `manifest.json`; the health service selects which of them are active but cannot add to it
+- Host access to `status.d420.de/api/*` - to fetch the fleet health data (see [Instances](#instances)); no other path on that domain is requested
 - `storage` - to remember the cached ranking and which instances failed for you
 
 **Why the X host permission is worth it.** An earlier version avoided it, and the cost was that X still received your request while the extension decided where to send you. Intercepting properly is what makes the guarantee real: with these permissions, **X is never contacted at all**. The permission buys the privacy, it doesn't spend it.
 
-No `<all_urls>`. No access to any site other than X/Twitter and the configured Nitter instances.
+No `<all_urls>`. No access to any site other than X/Twitter and the Nitter instances listed in `manifest.json`.
 
 ## Privacy
 
 No telemetry, no analytics, no tracking, no backend of ours.
 
 - **X never receives your request.** It is redirected inside your browser before it is sent, so X does not learn that you clicked.
-- **Your URL goes to one Nitter instance at a time** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. If that instance fails, the extension falls back to another configured instance, so the same path may reach more than one instance sequentially over the course of one navigation - never simultaneously, and never to more than the instances listed above.
+- **Your URL goes to one Nitter instance at a time** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. If that instance fails, the extension falls back to another permitted instance, so the same path may reach more than one instance sequentially over the course of one navigation - never simultaneously, and never to any domain outside the permitted superset listed above.
 - **The health service receives no browsing data.** The extension requests one fixed URL with no parameters and no cookies, on a timer, identical for every user and unrelated to what you browse. It is never contacted as part of a navigation.
 - **The extension sends no probe traffic to Nitter instances.** Instance health is learned from pages you loaded anyway.
 - **The extension checks the loaded page for a small set of structural signals: whether it looks like a genuine Nitter page at all, and if so, whether Nitter's own error panel names a known instance-level failure.** This runs only on a navigation the extension is actively deciding the outcome of. The rest of the page - what you searched for, whose profile you viewed, the actual tweet content - is never read, stored, or sent anywhere; the check only ever produces a true/false result kept in memory for that one decision.
@@ -112,7 +119,7 @@ One thing this extension cannot do anything about: **some Nitter instances do no
 ## Known limitations
 
 - Nitter's own "Open in X" link does not work, because the extension intercepts that navigation too. Use a private window or disable the extension to reach X deliberately.
-- The instance list is fixed at release time. If the whole fleet degrades, an updated build is required.
+- The health service can activate and drop instances live, but only within the fixed permitted superset in `manifest.json`. A genuinely new domain still needs an updated build.
 - On instances that do not proxy media, media still loads from Twitter's CDN. See Privacy above.
 - `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, and `/privacy` stay on X, because Nitter has no equivalent for them.
 

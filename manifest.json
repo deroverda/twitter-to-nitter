@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Twitter/X to Nitter",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Redirect Twitter/X pages to a working Nitter frontend.",
   "icons": {
     "128": "icon.png"
@@ -16,8 +16,15 @@
     "*://x.com/*",
     "*://www.x.com/*",
     "*://mobile.x.com/*",
-    "https://nitter.catsarch.com/*",
     "https://nitter.kareem.one/*",
+    "https://nitter.jaydenha.uk/*",
+    "https://nitter.click/*",
+    "https://nitter.meowing.monster/*",
+    "https://nitter.netbub.com/*",
+    "https://nitter.miningtcup.me/*",
+    "https://shitter.thepixora.com/*",
+    "https://nitter.xitter.cc/*",
+    "https://xcancel.com/*",
     "https://status.d420.de/api/*"
   ],
   "background": {

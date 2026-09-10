@@ -7,10 +7,13 @@
 // navigation and never becomes the visible destination. The redirect decision is
 // synchronous and always made from data already in memory.
 //
-// Instance ranking comes from the Nitter Instance Health service at
+// The instance list is driven live by the Nitter Instance Health service at
 // https://status.d420.de/ (thanks to its operator), polled on a timer and cached
 // locally. Its API is explicitly intended for redirector services of this kind.
-// It is never on the critical navigation path, and no browsing data is sent to it.
+// Within the set of origins the manifest grants host access to, the service
+// decides which instances are active and how they rank; it is never on the
+// critical navigation path, and no browsing data is sent to it. A shipped seed
+// list is the cold-start and offline fallback.
 //
 // Local instance health comes from the outcome of the user's own navigations.
 // The extension generates no synthetic probe traffic to public Nitter instances.
@@ -22,25 +25,49 @@
 // Configuration
 // ============================================================
 
-// Curated from status.d420.de plus direct verification (see the CI check).
-const NITTER_INSTANCES = [
-    // "https://nitter.net", // disabled 2026-08-25: operator (zedeus) received a
-    // cease-and-desist from X Corp on 2026-08-24 and shut the instance down.
-    // Upstream Nitter development itself is paused. Re-enable only if it
-    // comes back and is independently verified.
-    // "https://xcancel.com", // disabled 2026-08-25: operator received a
-    // cease-and-desist from X Corp on 2026-08-24 and shut the instance down.
-    // Re-enable only if it comes back and is independently verified.
-    "https://nitter.catsarch.com",
-    // "https://lightbrd.com", // disabled 2026-08-25: not tracked by
-    // status.d420.de, failing in real navigation (403/504), and per
-    // github.com/zedeus/nitter/issues/1209 it doesn't proxy images/video/GIFs
-    // (they connect directly to Twitter's CDN) and loads Microsoft Clarity
-    // analytics -- a privacy leak this extension exists to avoid regardless
-    // of uptime. Re-enable only if both issues are independently verified
-    // fixed.
-    "https://nitter.kareem.one"
+// Cold-start and offline fallback list, and the ranking floor. Used verbatim
+// until the status service responds, and whenever it is unreachable or stale.
+// The live active list (see candidateOrigins) is this plus any status-service
+// instance currently reported healthy that the manifest also permits.
+//
+// Upstream Nitter resumed development in September 2026 after legal advice
+// (github.com/zedeus/nitter, "Nitter lives"), following X Corp's 2026-08-24
+// cease-and-desist. lightbrd.com stays out regardless of uptime: per
+// github.com/zedeus/nitter/issues/1209 it doesn't proxy images/video/GIFs
+// (they connect directly to Twitter's CDN) and loads Microsoft Clarity
+// analytics -- a privacy leak this extension exists to avoid.
+const SEED_INSTANCES = [
+    "https://nitter.kareem.one",
+    "https://nitter.jaydenha.uk",
+    "https://nitter.click",
+    "https://nitter.meowing.monster",
+    "https://nitter.netbub.com",
+    "https://nitter.miningtcup.me",
+    "https://shitter.thepixora.com",
+    "https://xcancel.com"
 ];
+
+// Every https origin the manifest grants host access to, minus the status
+// service itself. The status service can promote any of these into the active
+// list once it reports the instance healthy, and drop it when it doesn't; it
+// can never introduce an origin the manifest has not already permitted,
+// because a blocking redirect requires a static host permission for its target.
+const PERMITTED_ORIGINS = new Set(
+    (browser.runtime.getManifest().permissions || [])
+        .filter(perm => /^https:\/\//.test(perm))
+        .map(perm => {
+            try {
+                return new URL(perm.replace(/\/\*$/, "")).origin;
+            } catch {
+                return null;
+            }
+        })
+        .filter(origin => origin && origin !== "https://status.d420.de")
+);
+
+const PERMITTED_DOMAINS = new Set(
+    Array.from(PERMITTED_ORIGINS, origin => new URL(origin).hostname)
+);
 
 const TWITTER_HOSTS = new Set([
     "twitter.com",
@@ -60,7 +87,9 @@ const TWITTER_URL_PATTERNS = [
     "*://mobile.x.com/*"
 ];
 
-const NITTER_URL_PATTERNS = NITTER_INSTANCES.map(instance => instance + "/*");
+// Covers every instance the extension could ever redirect to, so the outcome
+// listeners fire for status-service-added instances too, not just seed ones.
+const NITTER_URL_PATTERNS = Array.from(PERMITTED_ORIGINS, origin => origin + "/*");
 
 // X-only surfaces Nitter has no equivalent for.
 const UNSUPPORTED_PREFIXES = [
@@ -109,22 +138,13 @@ const STATUS_KEY = "statusCache";
 const HEALTH_KEY = "instanceHealth";
 const LEGACY_KEYS = ["workingInstance"];
 
-const INSTANCE_ORIGINS = new Set(
-    NITTER_INSTANCES.map(instance => new URL(instance).origin)
-);
-
-const ORIGIN_TO_DOMAIN = new Map(
-    NITTER_INSTANCES.map(instance => [instance, new URL(instance).hostname])
-);
-
-const KNOWN_STATUS_DOMAINS = new Set(ORIGIN_TO_DOMAIN.values());
 
 
 // ============================================================
 // State
 //
 // Everything the redirect path reads lives in memory, so the decision is
-// synchronous. The shipped list order is the floor: it is available from the
+// synchronous. The seed list order is the floor: it is available from the
 // first line of this script, before any storage or network work completes.
 // ============================================================
 
@@ -134,24 +154,50 @@ let statusBackoffUntil = 0;
 
 let localHealth = {};
 
-let ranked = NITTER_INSTANCES.slice();
+let ranked = SEED_INSTANCES.slice();
 
 
 // ============================================================
 // Ranking
 //
+// The candidate list is the seed list plus any status-service instance
+// currently reported healthy that the manifest also permits. It is then
+// ordered by:
+//
 // 1. instances not locally known-broken
 // 2. healthy per the status service
 // 3. higher points, then lower average response time
-// 4. shipped list order as a deterministic tiebreaker
+// 4. seed list order as a deterministic tiebreaker (seed instances first,
+//    then status-service additions in the order the service returned them)
 // ============================================================
+
+function domainOf(origin) {
+    return new URL(origin).hostname;
+}
 
 function statusFor(origin) {
     if (!statusHosts) {
         return null;
     }
 
-    return statusHosts[ORIGIN_TO_DOMAIN.get(origin)] || null;
+    return statusHosts[domainOf(origin)] || null;
+}
+
+// Seed list, plus every status-service instance currently healthy and
+// permitted by the manifest. Recomputed on each ranking pass, so the service
+// adds and drops instances live within the manifest-permitted set.
+function candidateOrigins() {
+    const origins = new Set(SEED_INSTANCES);
+
+    if (statusHosts) {
+        for (const [domain, info] of Object.entries(statusHosts)) {
+            if (info.healthy && PERMITTED_DOMAINS.has(domain)) {
+                origins.add("https://" + domain);
+            }
+        }
+    }
+
+    return Array.from(origins);
 }
 
 function locallyBroken(origin, now) {
@@ -167,7 +213,7 @@ function locallyBroken(origin, now) {
 function recomputeRanking() {
     const now = Date.now();
 
-    ranked = NITTER_INSTANCES
+    ranked = candidateOrigins()
         .map((origin, index) => {
             const info = statusFor(origin);
 
@@ -194,8 +240,8 @@ function recomputeRanking() {
         .map(entry => entry.origin);
 }
 
-// Least-bad selection: the ranking always returns every configured instance, so
-// there is no path where the absence of a healthy instance lets X through.
+// Least-bad selection: the ranking always includes the full seed list, so there
+// is no path where the absence of a healthy instance lets X through.
 function pickInstance(exclude) {
     for (const origin of ranked) {
         if (!exclude || !exclude.includes(origin)) {
@@ -223,7 +269,8 @@ function parseStatus(payload) {
     const hosts = {};
 
     for (const host of payload.hosts) {
-        if (!host || typeof host.domain !== "string" || !KNOWN_STATUS_DOMAINS.has(host.domain)) {
+        // Ignore anything the manifest can't grant a redirect to anyway.
+        if (!host || typeof host.domain !== "string" || !PERMITTED_DOMAINS.has(host.domain)) {
             continue;
         }
 
@@ -340,10 +387,10 @@ async function init() {
         const cachedStatus = stored && stored[STATUS_KEY];
         const cachedHealth = (stored && stored[HEALTH_KEY]) || {};
 
-        // Keep the local cache bounded to the configured instance list.
+        // Keep the local cache bounded to the manifest-permitted origins.
         localHealth = {};
 
-        for (const origin of INSTANCE_ORIGINS) {
+        for (const origin of PERMITTED_ORIGINS) {
             if (cachedHealth[origin]) {
                 localHealth[origin] = cachedHealth[origin];
             }
@@ -499,7 +546,7 @@ function originOf(rawUrl) {
     try {
         const origin = new URL(rawUrl).origin;
 
-        return INSTANCE_ORIGINS.has(origin) ? origin : null;
+        return PERMITTED_ORIGINS.has(origin) ? origin : null;
     } catch {
         return null;
     }

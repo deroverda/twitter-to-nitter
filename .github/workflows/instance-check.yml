@@ -5,9 +5,10 @@ name: Nitter Instance Check
 #
 # This runs once per day and makes a single request to the service. The
 # extension itself also polls this service at runtime (see STATUS_API in
-# background.js) to rank the shipped instances, but never to add or remove
-# one -- the instance list itself stays hardcoded and is curated by hand
-# from this report.
+# background.js) to rank instances and, within the set of origins the manifest
+# grants host access to, to add and drop them live. A genuinely new domain the
+# service starts tracking still needs a release to add its host permission --
+# that is what this report flags under "healthy instances not permitted".
 #
 # This workflow never rewrites source files.
 
@@ -22,23 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compare shipped instances against status.d420.de
+      - name: Compare seed and permitted instances against status.d420.de
         run: |
           set -euo pipefail
 
-          # Shipped list is derived from background.js so this check cannot
-          # drift out of sync with the extension itself. Comment-only lines
-          # (e.g. a disabled instance left in place for reference) are
-          # excluded first so a commented-out URL isn't counted as shipped.
-          sed -n '/^const NITTER_INSTANCES/,/^\];/p' background.js \
+          # Seed list is derived from background.js so this check cannot drift
+          # out of sync with the extension itself. Comment-only lines are
+          # excluded first so a commented-out URL isn't counted as seeded.
+          sed -n '/^const SEED_INSTANCES/,/^\];/p' background.js \
             | grep -v '^[[:space:]]*//' \
             | grep -o 'https://[a-z0-9.-]*' \
             | sed 's|https://||' \
             | sort -u > shipped.txt
 
-          # Host permissions from the manifest, for the consistency check.
-          # status.d420.de is the health-service permission, not a Nitter
-          # instance, so it's excluded from this comparison.
+          # Host permissions from the manifest: the superset the extension is
+          # allowed to redirect to. status.d420.de is the health-service
+          # permission, not a Nitter instance, so it's excluded.
           jq -r '.permissions[] | select(startswith("https://"))' manifest.json \
             | sed 's|https://||; s|/\*$||' \
             | grep -v '^status\.d420\.de' \
@@ -62,7 +62,7 @@ jobs:
             echo "_Verify manually before removing an instance._"
             echo ""
 
-            echo "### Shipped instances"
+            echo "### Seed instances"
             echo ""
             echo "| Instance | Service status | Nitter version |"
             echo "|---|---|---|"
@@ -79,12 +79,15 @@ jobs:
             done < shipped.txt
             echo ""
 
-            echo "### Healthy instances not shipped"
+            echo "### Healthy instances not permitted"
             echo ""
-            if comm -23 healthy.txt shipped.txt | grep -q .; then
+            echo "_The extension can only add these live once a release grants them a"
+            echo "host permission in \`manifest.json\`._"
+            echo ""
+            if comm -23 healthy.txt manifest-hosts.txt | grep -q .; then
               echo "| Instance | Points | Avg ping | Version |"
               echo "|---|---|---|---|"
-              comm -23 healthy.txt shipped.txt | while read -r host; do
+              comm -23 healthy.txt manifest-hosts.txt | while read -r host; do
                 jq -r --arg h "$host" '.hosts[] | select(.domain==$h)
                   | "| \(.domain) | \(.points) | \(.ping_avg // "-")ms | \(.version // "-") |"' api.json
               done
@@ -113,27 +116,39 @@ jobs:
 
             echo "### background.js / manifest.json consistency"
             echo ""
-            if diff -q shipped.txt manifest-hosts.txt > /dev/null; then
-              echo "Host permissions match the shipped instance list."
+            # Every seed instance must have a matching manifest host permission,
+            # or the extension can't redirect to it. The manifest is allowed to
+            # be a superset (instances the status service can add live).
+            missing=$(comm -23 shipped.txt manifest-hosts.txt || true)
+            if [ -z "$missing" ]; then
+              echo "Every seed instance has a matching host permission."
+              extra=$(comm -13 shipped.txt manifest-hosts.txt || true)
+              if [ -n "$extra" ]; then
+                echo ""
+                echo "Permitted beyond the seed list (status service may activate these live):"
+                echo ""
+                echo "$extra" | sed 's/^/- /'
+              fi
             else
-              echo "**Mismatch between \`NITTER_INSTANCES\` and manifest host permissions:**"
+              echo "**Seed instances with no manifest host permission:**"
               echo ""
               echo '```'
-              diff shipped.txt manifest-hosts.txt || true
+              echo "$missing"
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "--- shipped ---";   cat shipped.txt
+          echo "--- seed ---";      cat shipped.txt
+          echo "--- permitted ---"; cat manifest-hosts.txt
           echo "--- healthy ---";   cat healthy.txt
           echo "--- unhealthy ---"; cat unhealthy.txt
 
-          if ! diff -q shipped.txt manifest-hosts.txt > /dev/null; then
-            echo "::error::NITTER_INSTANCES and manifest host permissions are out of sync."
+          if comm -23 shipped.txt manifest-hosts.txt | grep -q .; then
+            echo "::error::A SEED_INSTANCES entry has no matching manifest host permission."
             exit 1
           fi
 
-      - name: Verify shipped instances serve real Nitter markup
+      - name: Verify seed instances serve real Nitter markup
         run: |
           set -uo pipefail
 
