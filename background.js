@@ -794,9 +794,12 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
 // id. Without this a cross-origin hop leaves the watchdog pinned to the old
 // origin, so it fires 8s later and yanks the user off a page that loaded fine.
 //
-// Otherwise the user navigated straight to an instance (search result,
-// bookmark, typed URL); track it for the same fallback, unless it came from
-// Nitter itself (an internal link mid-browse).
+// Otherwise the user navigated to an instance some other way -- a search
+// result, a bookmark, a typed URL, or a link clicked from within Nitter
+// itself; track it for the same fallback in every case, so a failure reached
+// by browsing inside an instance (e.g. an individual tweet permalink that
+// turns out to be rate-limited) falls back exactly like one reached by a
+// fresh redirect, instead of stranding the user on it.
 browser.webRequest.onBeforeRequest.addListener(
     (details) => {
         if (details.type !== "main_frame" || details.tabId < 0) {
@@ -819,10 +822,6 @@ browser.webRequest.onBeforeRequest.addListener(
             }
 
             armWatchdog(details.tabId, origin);
-            return;
-        }
-
-        if (details.originUrl && originOf(details.originUrl)) {
             return;
         }
 

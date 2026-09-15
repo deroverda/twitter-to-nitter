@@ -25,6 +25,17 @@ const EXPORTS = [
 function load() {
     const noop = () => {};
     const listener = { addListener: noop, removeListener: noop, hasListener: () => false };
+
+    // background.js registers two separate onBeforeRequest listeners on the
+    // same event; capture both in registration order so tests can drive the
+    // second one (the permitted-instance "follow" listener) directly.
+    const beforeRequestListeners = [];
+    const trackingListener = {
+        addListener: (fn) => beforeRequestListeners.push(fn),
+        removeListener: noop,
+        hasListener: () => false
+    };
+
     const ctx = {
         console: { log: noop, warn: noop, error: noop },
         setTimeout: () => 0,
@@ -37,7 +48,7 @@ function load() {
         browser: {
             runtime: { getManifest: () => manifest },
             webRequest: {
-                onBeforeRequest: listener,
+                onBeforeRequest: trackingListener,
                 onCompleted: listener,
                 onErrorOccurred: listener
             },
@@ -61,9 +72,10 @@ function load() {
 
     const epilogue = `\n;globalThis.__t = { ${EXPORTS.join(", ")},
         setStatus: (hosts, fetchedAt) => { statusHosts = hosts; statusFetchedAt = fetchedAt; },
-        getLocalHealth: () => localHealth };`;
+        getLocalHealth: () => localHealth,
+        getActiveRedirects: () => activeRedirects };`;
     vm.runInContext(SRC + epilogue, ctx);
-    return ctx.__t;
+    return { ...ctx.__t, followListener: beforeRequestListeners[1] };
 }
 
 const bg = load();
@@ -143,6 +155,23 @@ test("candidateOrigins is the seed list until fresh status data adds to it", () 
     assert.ok(!Array.from(bg.candidateOrigins()).includes("https://nitter.xitter.cc"));
 
     bg.setStatus(null, 0);
+});
+
+test("a link clicked from inside a Nitter instance is still tracked for fallback", () => {
+    const tabId = 4242;
+    assert.ok(!bg.getActiveRedirects().has(tabId));
+
+    bg.followListener({
+        type: "main_frame",
+        tabId: tabId,
+        requestId: "req-1",
+        url: "https://nitter.kareem.one/jack/status/1",
+        originUrl: "https://nitter.kareem.one/jack"
+    });
+
+    const record = bg.getActiveRedirects().get(tabId);
+    assert.ok(record, "an internal Nitter link click must still be tracked, so a failure it leads to can fall back");
+    assert.equal(record.tried[0], "https://nitter.kareem.one");
 });
 
 test("recordLocal keeps BROKEN entries and drops cleared ones", () => {
