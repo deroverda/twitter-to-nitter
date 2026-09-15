@@ -10,5 +10,9 @@ module.exports = {
     "package-lock.json",
     "test",
     "test/**/*",
+    "assets",
+    "assets/**/*",
+    "local",
+    "local/**/*",
   ],
 };
