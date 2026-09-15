@@ -93,6 +93,11 @@ for (const seed of SEED_INSTANCES) {
     }
 }
 
+// The ranking floor and candidate base must never include a seed the manifest
+// doesn't actually permit -- redirecting to one would be unobservable (see the
+// console.error above) since originOf() rejects its events outright.
+const SAFE_SEED_INSTANCES = SEED_INSTANCES.filter(origin => PERMITTED_ORIGINS.has(origin));
+
 const TWITTER_HOSTS = new Set([
     "twitter.com",
     "www.twitter.com",
@@ -136,9 +141,14 @@ const UNSUPPORTED_PREFIXES = [
     "/privacy"
 ];
 
-// Canonical status permalinks under /i/ that Nitter does serve. Nitter itself
-// redirects /i/web/status/<id> to /i/status/<id>, so both are passed through.
-const SUPPORTED_I_PATH = /^\/i\/(web\/)?status\/\d+/;
+// Canonical status and list permalinks under /i/ that Nitter does serve.
+// Nitter itself redirects /i/web/status/<id> to /i/status/<id>, so both are
+// passed through. /i/lists/<id> and its /members page are real upstream
+// routes too (src/routes/list.nim); everything else under /i/ -- spaces,
+// articles, broadcasts, bookmarks -- is explicitly unsupported by Nitter
+// itself (src/routes/unsupported.nim only allows "status", "lists", "user"),
+// so leaving them blocked here matches Nitter's own stance, not just ours.
+const SUPPORTED_I_PATH = /^\/i\/(?:(?:web\/)?status\/\d+|lists\/\d+(?:\/members)?)/;
 
 // The service updates every 900s; polling faster than that gets rate limited.
 const STATUS_REFRESH_MS = 15 * 60 * 1000;
@@ -146,6 +156,12 @@ const STATUS_RETRY_MS = 5 * 60 * 1000;
 const STATUS_BACKOFF_MS = 60 * 60 * 1000;
 const STATUS_STALE_MS = 6 * 60 * 60 * 1000;
 const STATUS_FETCH_TIMEOUT_MS = 8000;
+
+// Defensive only: the service returns a small, fixed-shape instance list, so
+// this should never come close. Guards against a misconfigured or compromised
+// endpoint returning an arbitrarily large body before it gets buffered and
+// parsed in the background page.
+const STATUS_MAX_BODY_BYTES = 1 * 1024 * 1024;
 
 // How long a locally observed hard failure keeps an instance demoted.
 const LOCAL_FAILURE_TTL_MS = 30 * 60 * 1000;
@@ -155,10 +171,16 @@ const LOCAL_FAILURE_TTL_MS = 30 * 60 * 1000;
 // far too long to leave the user staring at a blank tab.
 const NAV_TIMEOUT_MS = 8000;
 
-// Circuit breaker against pathological redirect loops.
+// Circuit breaker against pathological redirect loops. The only realistic
+// live trigger is rapid *legitimate* X clicks (noteRedirect counts every new
+// X interception, not just bounce-backs), so the threshold has to clear
+// normal fast browsing -- clicking several X links from an aggregator page
+// in quick succession is plausible and must not cut a tab off from
+// interception. The suppression window is kept short so a false trip is
+// only a brief inconvenience, not a lasting privacy regression.
 const LOOP_WINDOW_MS = 10000;
-const LOOP_MAX_REDIRECTS = 3;
-const LOOP_SUPPRESS_MS = 30000;
+const LOOP_MAX_REDIRECTS = 6;
+const LOOP_SUPPRESS_MS = 10000;
 
 const STATUS_KEY = "statusCache";
 const HEALTH_KEY = "instanceHealth";
@@ -180,7 +202,7 @@ let statusBackoffUntil = 0;
 
 let localHealth = {};
 
-let ranked = SEED_INSTANCES.slice();
+let ranked = SAFE_SEED_INSTANCES.slice();
 
 
 // ============================================================
@@ -222,7 +244,7 @@ function statusFor(origin) {
 // permitted by the manifest. Recomputed on each ranking pass, so the service
 // adds and drops instances live within the manifest-permitted set.
 function candidateOrigins() {
-    const origins = new Set(SEED_INSTANCES);
+    const origins = new Set(SAFE_SEED_INSTANCES);
     const hosts = freshStatusHosts();
 
     if (hosts) {
@@ -305,12 +327,21 @@ function parseStatus(payload) {
     const hosts = {};
 
     for (const host of payload.hosts) {
-        // Ignore anything the manifest can't grant a redirect to anyway.
-        if (!host || typeof host.domain !== "string" || !PERMITTED_DOMAINS.has(host.domain)) {
+        if (!host || typeof host.domain !== "string") {
             continue;
         }
 
-        hosts[host.domain] = {
+        // DNS is case-insensitive and a domain can carry a trailing dot; normalise
+        // before the permitted-set lookup so a service-side formatting change
+        // doesn't silently drop an instance from live health data.
+        const domain = host.domain.toLowerCase().replace(/\.$/, "");
+
+        // Ignore anything the manifest can't grant a redirect to anyway.
+        if (!PERMITTED_DOMAINS.has(domain)) {
+            continue;
+        }
+
+        hosts[domain] = {
             healthy: host.healthy === true,
             points: typeof host.points === "number" ? host.points : null,
             ping: typeof host.ping_avg === "number" ? host.ping_avg : null,
@@ -329,6 +360,13 @@ function persistStatus() {
 
 async function refreshStatus() {
     const now = Date.now();
+
+    // Cheap and idempotent: re-applies staleness (freshStatusHosts crossing
+    // STATUS_STALE_MS demotes status-promoted instances back out) even when
+    // this call does nothing else below, so a prolonged outage doesn't leave
+    // stale-promoted instances ranked ahead of the seed list until some
+    // unrelated navigation happens to trigger a recompute.
+    recomputeRanking();
 
     if (now < statusBackoffUntil) {
         return;
@@ -357,6 +395,14 @@ async function refreshStatus() {
 
         if (response.status !== 200) {
             statusBackoffUntil = Date.now() + STATUS_RETRY_MS;
+            return;
+        }
+
+        const contentLength = Number(response.headers.get("content-length"));
+
+        if (Number.isFinite(contentLength) && contentLength > STATUS_MAX_BODY_BYTES) {
+            statusBackoffUntil = Date.now() + STATUS_RETRY_MS;
+            console.warn("[Twitter → Nitter] Status response too large; ignoring.");
             return;
         }
 
@@ -409,8 +455,21 @@ function isHardFailure(statusCode) {
     return (
         statusCode === 401 ||
         statusCode === 403 ||
+        statusCode === 408 ||
         statusCode === 429 ||
         statusCode >= 500
+    );
+}
+
+// onErrorOccurred fires for reasons that have nothing to do with the remote
+// instance being broken -- the user's own tracking protection or another
+// local policy can block a request too. Only a genuine network-level failure
+// should persist a BROKEN mark that demotes the instance for other tabs and
+// future navigations; the current attempt still falls back regardless (see
+// the listener below), this only narrows what gets written to local health.
+function isDefinitiveNetworkFailure(error) {
+    return /^(?:NS_ERROR_NET_|NS_ERROR_CONNECTION_REFUSED$|NS_ERROR_UNKNOWN_HOST$)/.test(
+        error || ""
     );
 }
 
@@ -427,11 +486,14 @@ async function init() {
         const cachedStatus = stored && stored[STATUS_KEY];
         const cachedHealth = (stored && stored[HEALTH_KEY]) || {};
 
-        // Keep the local cache bounded to the manifest-permitted origins.
-        localHealth = {};
-
+        // Merge into whatever localHealth already holds rather than resetting
+        // it: a real navigation's recordLocal() can land while the storage
+        // read above is still pending, and clobbering that live write with a
+        // stale disk snapshot would silently lose it. Cache only fills gaps;
+        // it never overrides an entry already present. Bounded to permitted
+        // origins either way.
         for (const origin of PERMITTED_ORIGINS) {
-            if (cachedHealth[origin]) {
+            if (cachedHealth[origin] && !localHealth[origin]) {
                 localHealth[origin] = cachedHealth[origin];
             }
         }
@@ -682,6 +744,25 @@ function armWatchdog(tabId, origin) {
     }, NAV_TIMEOUT_MS);
 }
 
+// Self-contained data: URL, so this needs no packaged file, no new
+// permission, and no web_accessible_resources entry -- shown only when every
+// configured instance has been tried and failed for one navigation.
+function terminalFailurePage(path) {
+    const safePath = String(path).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+
+    const html =
+        "<!doctype html><meta charset=\"utf-8\"><title>Twitter/X to Nitter</title>" +
+        "<body style=\"font-family:sans-serif;max-width:32em;margin:4em auto;line-height:1.5;color:#1a1a1a\">" +
+        "<h1>Every Nitter instance failed</h1>" +
+        "<p>Every configured instance was tried for this page and none of them worked right now.</p>" +
+        `<p><a href="https://x.com${safePath}">Try again</a></p>` +
+        "</body>";
+
+    return "data:text/html;charset=utf-8," + encodeURIComponent(html);
+}
+
 async function switchInstance(tabId, origin, { skipCommittedCheck = false, reason = "failed" } = {}) {
     const record = activeRedirects.get(tabId);
 
@@ -765,11 +846,14 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
     const next = pickInstance(record.tried);
 
     if (!next) {
-        // Every configured instance has been tried for this navigation. Leave
-        // the user where they are rather than looping.
+        // Every configured instance has been tried for this navigation. Show
+        // a terminal failure page rather than leaving the user stranded on
+        // whatever broken page the last instance rendered, with no
+        // explanation of what happened or a way to retry.
         console.log(
-            `[Twitter → Nitter] ${origin} ${reason}; every configured instance already tried for this navigation, leaving as-is.`
+            `[Twitter → Nitter] ${origin} ${reason}; every configured instance already tried for this navigation.`
         );
+        browser.tabs.update(tabId, { url: terminalFailurePage(livePath) }).catch(() => {});
         activeRedirects.delete(tabId);
         return;
     }
@@ -972,7 +1056,9 @@ browser.webRequest.onErrorOccurred.addListener(
             clearWatchdog(details.tabId);
         }
 
-        recordLocal(origin, "BROKEN");
+        if (isDefinitiveNetworkFailure(details.error)) {
+            recordLocal(origin, "BROKEN");
+        }
 
         if (isCurrent) {
             switchInstance(details.tabId, origin, {

@@ -51,7 +51,13 @@
 
     // 5. Nitter's own error panel. It is also used for "user not found" /
     //    "tweet not found", which are legitimate answers, so the panel's text
-    //    still has to name a known instance-level failure.
+    //    still has to name a known instance-level failure. Unlike step 4, this
+    //    is NOT gated on !hasContent: a dedicated error panel is a precise,
+    //    structural signal (a real tweet's text can't land inside it), not a
+    //    loose body-text scan, so the false-positive risk step 4's gate exists
+    //    for doesn't apply here. An explicit named failure is authoritative
+    //    even if some content also rendered -- matching the README's own
+    //    description of this behaviour.
     const panel = document.querySelector(".error-panel");
 
     if (panel) {
