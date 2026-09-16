@@ -1063,14 +1063,15 @@ async function switchInstance(tabId, origin, attemptId, { skipCommittedCheck = f
     // the next instance) must not touch the record of whatever we're
     // currently tracking instead.
     //
-    // attemptId (not just record identity + origin) is what actually proves
-    // that: a same-origin self-redirect reuses the same record object and
-    // the same origin for a newer request, so those two checks alone can't
-    // tell a stale caller from the current one. record.switching blocks a
-    // second call for the *same* attempt (e.g. a late onErrorOccurred
-    // arriving while the watchdog's own switch is still awaiting tabs.get)
-    // from acting on it twice.
-    if (!record || record.currentOrigin !== origin || record.attemptId !== attemptId || record.switching) {
+    // attemptId is what actually proves that: armWatchdog sets it together
+    // with currentOrigin on every arm, so a same-origin self-redirect (which
+    // reuses the same record and origin for a newer request) still gets a
+    // fresh attemptId, and record identity + origin alone couldn't tell a
+    // stale caller from the current one. record.switching blocks a second
+    // call for the *same* attempt (e.g. a late onErrorOccurred arriving
+    // while the watchdog's own switch is still awaiting tabs.get) from
+    // acting on it twice.
+    if (!record || record.attemptId !== attemptId || record.switching) {
         return;
     }
 
@@ -1118,7 +1119,7 @@ async function switchInstance(tabId, origin, attemptId, { skipCommittedCheck = f
         // A new X interception, or a same-origin re-arm, can replace or
         // reuse this tab's record while the tabs.get() above was in flight.
         // Re-confirm it's still the same attempt before touching anything.
-        if (activeRedirects.get(tabId) !== record || record.currentOrigin !== origin || record.attemptId !== attemptId) {
+        if (activeRedirects.get(tabId) !== record || record.attemptId !== attemptId) {
             record.switching = false;
             return;
         }

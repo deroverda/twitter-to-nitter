@@ -582,6 +582,12 @@ test("a confirmed 'fail' verdict still demotes the instance fleet-wide", async (
 // Attempt-identity races (external audit findings, 2026-09-16)
 // ============================================================
 
+// A tracked attempt already in flight for `origin`, as if switchInstance had
+// just redirected the tab there and armed a watchdog for it.
+function activeRecord(origin) {
+    return { path: "/jack", tried: [origin], timer: null, switching: false, startedAt: 0, currentOrigin: origin, attemptId: 1 };
+}
+
 test("a stale watchdog cannot hijack a newer same-origin attempt (self-redirect race)", async () => {
     let releaseTabsGet;
     const gate = new Promise((resolve) => { releaseTabsGet = resolve; });
@@ -631,10 +637,7 @@ test("armWatchdog caps its re-arm delay by the remaining MAX_FALLBACK_MS budget"
     const tabId = 9100;
     const origin = bg2.SEED_INSTANCES[0];
 
-    bg2.getActiveRedirects().set(tabId, {
-        path: "/jack", tried: [origin], timer: null, switching: false,
-        startedAt: 0, currentOrigin: origin, attemptId: 1
-    });
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
 
     // A naive re-arm would wait the full 20s stream timeout (~64s total
     // elapsed); the capped watchdog must fire within the ~1s actually left.
@@ -656,10 +659,7 @@ test("a hard HTTP failure falls back even when the tab's URL hasn't committed ye
     const tabId = 9200;
     const origin = bg2.SEED_INSTANCES[0];
 
-    bg2.getActiveRedirects().set(tabId, {
-        path: "/jack", tried: [origin], timer: null, switching: false,
-        startedAt: 0, currentOrigin: origin, attemptId: 1
-    });
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
     // onCompleted (network finished) firing does not mean the tab's URL has
     // been updated to reflect it yet -- those are two distinct moments, not
     // one. Leave it unreadable to simulate the gap between them.
@@ -686,10 +686,7 @@ test("a 403 with a Cloudflare challenge header is not treated as an immediate ha
     const tabId = 9300;
     const origin = bg2.SEED_INSTANCES[0];
 
-    bg2.getActiveRedirects().set(tabId, {
-        path: "/jack", tried: [origin], timer: null, switching: false,
-        startedAt: 0, currentOrigin: origin, attemptId: 1
-    });
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
     bg2.setTab(origin + "/jack", "complete");
 
     await bg2.onCompleted({
@@ -709,10 +706,7 @@ test("a plain 403 with no Cloudflare challenge header is still a hard failure", 
     const tabId = 9301;
     const origin = bg2.SEED_INSTANCES[0];
 
-    bg2.getActiveRedirects().set(tabId, {
-        path: "/jack", tried: [origin], timer: null, switching: false,
-        startedAt: 0, currentOrigin: origin, attemptId: 1
-    });
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
 
     await bg2.onCompleted({
         type: "main_frame", tabId, url: origin + "/jack", requestId: undefined,
