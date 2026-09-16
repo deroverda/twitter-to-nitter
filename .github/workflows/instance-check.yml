@@ -148,6 +148,18 @@ jobs:
             exit 1
           fi
 
+          # README's "Seed list" bullets are hand-maintained prose, not derived
+          # from source, so they can drift the way the xcancel.com removal did.
+          sed -n '/\*\*Seed list\*\*/,/^\*\*Permitted superset\*\*/p' README.md \
+            | grep -oE '^- [a-z0-9.-]+' | sed 's/^- //' | sort -u > readme-seed.txt
+
+          if ! diff -q shipped.txt readme-seed.txt > /dev/null; then
+            echo "::error::README's Seed list does not match SEED_INSTANCES in background.js."
+            echo "background.js has:"; cat shipped.txt
+            echo "README has:"; cat readme-seed.txt
+            exit 1
+          fi
+
       - name: Verify seed instances serve real Nitter markup
         run: |
           set -uo pipefail
