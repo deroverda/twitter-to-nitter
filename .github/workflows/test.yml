@@ -16,6 +16,18 @@ jobs:
         with:
           node-version: 24
 
+      - name: Verify referenced extension files are tracked
+        run: |
+          set -euo pipefail
+          missing=""
+          for f in $(grep -ohE '[`"][a-zA-Z_-]+\.(html|js)[`"?]' background.js manifest.json | tr -d '`"?' | sort -u); do
+            git ls-files --error-unmatch "$f" >/dev/null 2>&1 || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Referenced but not tracked in git:$missing"
+            exit 1
+          fi
+
       - run: npm ci
 
       - run: npm test
