@@ -604,6 +604,27 @@ function isHardFailure(statusCode) {
     );
 }
 
+// Cloudflare's managed/JS challenge commonly answers with HTTP 403, not 200
+// -- so treating every 403 as a hard failure demotes the instance and
+// switches away before check-page.js's own challenge-still-resolving
+// detection (see its step 1) ever gets a chance to run, defeating that logic
+// entirely for the common case. `cf-mitigated: challenge` is the header
+// Cloudflare sends on a challenge response; its presence means this 403
+// isn't the instance failing, it's Cloudflare standing in front of it. Only
+// exempts 403 from the immediate hard-failure path -- the page still has to
+// pass isHTMLResponse/pageShowsFailure normally afterward, same as any other
+// response. If the header is ever absent or renamed, this simply never
+// matches and behavior is unchanged from before this check existed.
+function isCloudflareChallenge(statusCode, headers) {
+    if (statusCode !== 403 || !Array.isArray(headers)) {
+        return false;
+    }
+
+    const header = headers.find(h => h && typeof h.name === "string" && h.name.toLowerCase() === "cf-mitigated");
+
+    return Boolean(header && typeof header.value === "string" && header.value.toLowerCase().includes("challenge"));
+}
+
 // onErrorOccurred fires for reasons that have nothing to do with the remote
 // instance being broken -- the user's own tracking protection or another
 // local policy can block a request too. Only a genuine network-level failure
@@ -771,6 +792,14 @@ function noteRedirect(tabId) {
 
 const activeRedirects = new Map();
 
+// A record is a mutable object reused across multiple browser requests to
+// the same tab (self-redirects, hops between instances), so record identity
+// and origin alone can't tell a stale async callback apart from the attempt
+// that superseded it -- both can share the same record and the same origin.
+// Every armWatchdog() call stamps the record with a fresh attemptId; any code
+// resuming after an await must re-check it still matches before acting.
+let nextAttemptId = 0;
+
 browser.webRequest.onBeforeRequest.addListener(
     (details) => {
         if (details.type !== "main_frame") {
@@ -855,15 +884,23 @@ function originOf(rawUrl) {
 }
 
 // True when a webRequest event belongs to the attempt currently tracked for
-// its tab: same landing origin, and -- once we have captured it -- the same
-// underlying request. The requestId check stops a stale event from a
-// superseded request to the same instance (e.g. a second fast X navigation
-// that happened to pick the same instance) from being taken for the live one.
+// its tab: same landing origin, and the same underlying request. The
+// requestId check stops a stale event from a superseded request to the same
+// instance (e.g. a second fast X navigation that happened to pick the same
+// instance) from being taken for the live one.
+//
+// requestId must match exactly -- no undefined wildcard. By the time any
+// outcome listener (onResponseStarted/onCompleted/onErrorOccurred) fires for
+// a request, the "learn from real navigation" onBeforeRequest listener below
+// has already run for that same request (Firefox fires onBeforeRequest before
+// any later event in a request's lifecycle) and stamped record.requestId with
+// its real id. A record whose requestId is still undefined here belongs to no
+// request yet, so nothing should be able to match it as "current".
 function sameAttempt(record, origin, requestId) {
     return Boolean(
         record &&
         record.currentOrigin === origin &&
-        (record.requestId === undefined || record.requestId === requestId)
+        record.requestId === requestId
     );
 }
 
@@ -885,6 +922,20 @@ function armWatchdog(tabId, origin, timeoutMs = NAV_TIMEOUT_MS) {
 
     clearWatchdog(tabId);
     record.currentOrigin = origin;
+    record.attemptId = ++nextAttemptId;
+
+    const attemptId = record.attemptId;
+
+    // MAX_FALLBACK_MS is meant to bound total wall-clock time for one
+    // navigation, but a naive re-arm at a fixed timeoutMs each time can blow
+    // past it: a response arriving at, say, 44s would re-arm a fresh 20s
+    // stream watchdog and let the attempt run to ~64s before switchInstance's
+    // own outOfTime check is ever consulted. Capping the delay by whatever
+    // budget is actually left keeps the watchdog itself inside the promised
+    // bound; switchInstance still decides what "out of time" means once it
+    // fires.
+    const remaining = MAX_FALLBACK_MS - (Date.now() - record.startedAt);
+    const delay = Math.max(0, Math.min(timeoutMs, remaining));
 
     record.timer = setTimeout(async () => {
         // Liveness check before treating this as an instance failure. The
@@ -932,9 +983,12 @@ function armWatchdog(tabId, origin, timeoutMs = NAV_TIMEOUT_MS) {
         }
 
         // A new attempt (re-arm, or a fresh X interception) may have replaced
-        // this record while tabs.get was in flight. If so, it is not ours to
-        // touch.
-        if (activeRedirects.get(tabId) !== record || record.currentOrigin !== origin) {
+        // this record, or re-armed this same record for a newer request,
+        // while tabs.get was in flight. Record identity and origin alone
+        // can't tell that apart -- a same-origin self-redirect reuses both --
+        // so attemptId is what actually pins this callback to the attempt it
+        // was armed for.
+        if (activeRedirects.get(tabId) !== record || record.attemptId !== attemptId) {
             return;
         }
 
@@ -952,11 +1006,11 @@ function armWatchdog(tabId, origin, timeoutMs = NAV_TIMEOUT_MS) {
         // it for *this* navigation, which is all a mere timeout justifies.
         // Fleet-wide demotion is reserved for the deterministic signals below
         // (a real HTTP failure or a definitive network error).
-        switchInstance(tabId, origin, {
+        switchInstance(tabId, origin, attemptId, {
             skipCommittedCheck: true,
             reason: "did not respond in time"
         });
-    }, timeoutMs);
+    }, delay);
 }
 
 // Response headers arrived for the attempt currently being tracked: the
@@ -995,7 +1049,7 @@ function terminalFailurePage(path) {
     return browser.runtime.getURL(`terminal-failure.html?path=${encodeURIComponent(path)}`);
 }
 
-async function switchInstance(tabId, origin, { skipCommittedCheck = false, reason = "failed" } = {}) {
+async function switchInstance(tabId, origin, attemptId, { skipCommittedCheck = false, reason = "failed" } = {}) {
     const record = activeRedirects.get(tabId);
 
     // The breaker guards new X interceptions (onBeforeRequest) against a
@@ -1008,10 +1062,15 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
     // its onErrorOccurred arriving after the watchdog already moved on to
     // the next instance) must not touch the record of whatever we're
     // currently tracking instead.
-    // record.switching blocks a second call (e.g. a late onErrorOccurred
+    //
+    // attemptId (not just record identity + origin) is what actually proves
+    // that: a same-origin self-redirect reuses the same record object and
+    // the same origin for a newer request, so those two checks alone can't
+    // tell a stale caller from the current one. record.switching blocks a
+    // second call for the *same* attempt (e.g. a late onErrorOccurred
     // arriving while the watchdog's own switch is still awaiting tabs.get)
-    // from acting on the same attempt twice.
-    if (!record || record.currentOrigin !== origin || record.switching) {
+    // from acting on it twice.
+    if (!record || record.currentOrigin !== origin || record.attemptId !== attemptId || record.switching) {
         return;
     }
 
@@ -1021,23 +1080,29 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
 
     if (skipCommittedCheck) {
         // Nothing committed for this attempt: either the watchdog timed out
-        // waiting for a response, or the request failed at the network level
+        // waiting for a response, the request failed at the network level
         // (onErrorOccurred -- offline, DNS failure, connection refused,
-        // aborted) before any document loaded. In both cases the tab's URL
-        // still reflects whatever page it was on *before* the redirect (or is
-        // absent entirely, since this extension has no "tabs" permission) --
-        // never the failed instance. Reading it here would misidentify the
-        // failure as the user navigating away and abandon the fallback. Use
-        // the path we originally sent the tab to instead.
+        // aborted) before any document loaded, or it's a hard HTTP failure
+        // status (401/403/408/429/5xx+) from onCompleted. In every case the
+        // tab's URL is not a reliable source of truth here: onCompleted fires
+        // on network completion, which is not the same moment as the tab's
+        // URL being updated to reflect the new document (that's a separate,
+        // later commit step) -- reading it too early can throw (no URL yet)
+        // or read back the *previous* page, and either one used to make this
+        // function abandon the whole attempt with no fallback and no terminal
+        // failure page. Use the path we already know from webRequest events
+        // instead: the "learn from real navigation" listener below keeps
+        // record.path in sync with every hop within this origin (e.g.
+        // /i/web/status/<id> -> /i/status/<id>), so it already reflects any
+        // self-redirect that happened before the failure.
         livePath = record.path;
     } else {
-        // onCompleted with a hard-failure status: the instance actually
-        // returned an HTTP response, so the request committed and the tab's
-        // URL reflects it. Confirm the tab is still on the instance that just
-        // failed before redirecting it, so a stale event can't hijack
-        // whatever the user is looking at now. Only the origin is checked,
-        // not the exact path: the instance itself may have issued its own
-        // redirect (e.g. /i/web/status/<id> -> /i/status/<id>) before
+        // The page actually rendered (check-page.js ran against it), so the
+        // tab's URL is trustworthy here. Confirm the tab is still on the
+        // instance that just failed before redirecting it, so a stale event
+        // can't hijack whatever the user is looking at now. Only the origin
+        // is checked, not the exact path: the instance itself may have issued
+        // its own redirect (e.g. /i/web/status/<id> -> /i/status/<id>) before
         // failing, and that is still the same attempt, not a user navigating
         // away.
         let currentUrl;
@@ -1050,10 +1115,10 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
             return;
         }
 
-        // A new X interception can replace this tab's record while the
-        // tabs.get() above was in flight. Re-fetch and confirm it's still the
-        // same attempt before touching anything.
-        if (activeRedirects.get(tabId) !== record || record.currentOrigin !== origin) {
+        // A new X interception, or a same-origin re-arm, can replace or
+        // reuse this tab's record while the tabs.get() above was in flight.
+        // Re-confirm it's still the same attempt before touching anything.
+        if (activeRedirects.get(tabId) !== record || record.currentOrigin !== origin || record.attemptId !== attemptId) {
             record.switching = false;
             return;
         }
@@ -1255,11 +1320,16 @@ browser.webRequest.onCompleted.addListener(
             clearWatchdog(details.tabId);
         }
 
-        if (isHardFailure(details.statusCode)) {
+        if (isHardFailure(details.statusCode) && !isCloudflareChallenge(details.statusCode, details.responseHeaders)) {
             recordLocal(origin, "BROKEN");
 
             if (isCurrent) {
-                switchInstance(details.tabId, origin, {
+                // skipCommittedCheck: true -- reading the tab's committed URL
+                // here isn't safe (see switchInstance's own comment): a hard
+                // HTTP failure only tells us the network request finished, not
+                // that the tab's URL has been updated to reflect it yet.
+                switchInstance(details.tabId, origin, record.attemptId, {
+                    skipCommittedCheck: true,
                     reason: `returned HTTP ${details.statusCode}`
                 });
             } else {
@@ -1278,8 +1348,10 @@ browser.webRequest.onCompleted.addListener(
                 // executeScript above is async: the tab may have navigated
                 // during it, in which case check-page.js ran against a
                 // different document and its verdict is not about this
-                // instance. Re-confirm before acting on it.
-                if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
+                // instance. Re-fetch and re-confirm before acting on it.
+                const freshRecord = activeRedirects.get(details.tabId);
+
+                if (sameAttempt(freshRecord, origin, details.requestId)) {
                     if (failure === "unknown") {
                         // Doesn't look like Nitter at all, but not confidently
                         // -- could be a genuine operator shutdown page, or
@@ -1292,7 +1364,7 @@ browser.webRequest.onCompleted.addListener(
                         recordLocal(origin, "BROKEN");
                     }
 
-                    switchInstance(details.tabId, origin, {
+                    switchInstance(details.tabId, origin, freshRecord.attemptId, {
                         reason: failure === "unknown"
                             ? "did not render as a Nitter page"
                             : "rendered a soft failure page"
@@ -1351,7 +1423,7 @@ browser.webRequest.onErrorOccurred.addListener(
         }
 
         if (isCurrent) {
-            switchInstance(details.tabId, origin, {
+            switchInstance(details.tabId, origin, record.attemptId, {
                 skipCommittedCheck: true,
                 reason: "failed to load"
             });

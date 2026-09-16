@@ -107,7 +107,7 @@ function load(manifestOverride, fetchOverride, randomOverride, options = {}) {
             },
             tabs: {
                 onRemoved: listener,
-                get: async () => ({ url: tabState.url, status: tabState.status }),
+                get: options.tabsGet || (async () => ({ url: tabState.url, status: tabState.status })),
                 query: async () => [{ url: tabState.url, status: tabState.status }],
                 update: async (tabId, opts) => {
                     tabsUpdateCalls.push({ tabId, ...opts });
@@ -263,10 +263,15 @@ test("refreshStatus recomputes ranking even when its own fetch fails, dropping s
     );
 });
 
-test("sameAttempt matches on origin plus request id when known", () => {
+test("sameAttempt requires an exact request id match, no undefined wildcard", () => {
     assert.equal(bg.sameAttempt({ currentOrigin: "https://a", requestId: "5" }, "https://a", "5"), true);
     assert.equal(bg.sameAttempt({ currentOrigin: "https://a", requestId: "5" }, "https://a", "6"), false);
-    assert.equal(bg.sameAttempt({ currentOrigin: "https://a" }, "https://a", "6"), true); // id not captured yet
+    // A record whose requestId hasn't been captured yet must not match any
+    // request as a wildcard: by the time an outcome event can fire, the
+    // onBeforeRequest listener for that request has already stamped
+    // record.requestId, so an undefined requestId here means the event
+    // belongs to no tracked request and must be rejected, not accepted.
+    assert.equal(bg.sameAttempt({ currentOrigin: "https://a" }, "https://a", "6"), false);
     assert.equal(bg.sameAttempt({ currentOrigin: "https://a", requestId: "5" }, "https://b", "5"), false);
     assert.equal(bg.sameAttempt(null, "https://a", "5"), false);
 });
@@ -568,6 +573,150 @@ test("a confirmed 'fail' verdict still demotes the instance fleet-wide", async (
         requestId: undefined,
         statusCode: 200,
         responseHeaders: undefined
+    });
+
+    assert.equal(bg2.getLocalHealth()[origin].state, "BROKEN");
+});
+
+// ============================================================
+// Attempt-identity races (external audit findings, 2026-09-16)
+// ============================================================
+
+test("a stale watchdog cannot hijack a newer same-origin attempt (self-redirect race)", async () => {
+    let releaseTabsGet;
+    const gate = new Promise((resolve) => { releaseTabsGet = resolve; });
+    let tabsGetCalls = 0;
+
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        tabsGet: async () => {
+            tabsGetCalls++;
+            await gate;
+            return { url: undefined, status: "loading" };
+        }
+    });
+    const tabId = 9000;
+
+    const redirect = bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack" });
+    const origin = new URL(redirect.redirectUrl).origin;
+
+    bg2.followListener({ type: "main_frame", tabId, url: origin + "/jack", requestId: "req-1" });
+
+    // Fire the watchdog. Its callback starts and blocks inside
+    // `await browser.tabs.get(tabId)` (held open by `gate` above).
+    const watchdogFire = bg2.advance(bg2.NAV_TIMEOUT_MS);
+    assert.equal(tabsGetCalls, 1, "the watchdog must have started its liveness check");
+
+    // Before that await resolves, a same-origin self-redirect supersedes the
+    // attempt (e.g. /i/web/status/<id> -> /i/status/<id>): the "follow"
+    // listener reuses the same record and origin, with a new request id.
+    bg2.followListener({ type: "main_frame", tabId, url: origin + "/i/status/1", requestId: "req-2" });
+
+    // Now let the stale watchdog's liveness check resolve and finish.
+    releaseTabsGet();
+    await watchdogFire;
+
+    assert.equal(
+        bg2.getTabUpdateCalls().length,
+        0,
+        "the stale watchdog must not redirect the tab away from the newer, still-loading attempt"
+    );
+});
+
+test("armWatchdog caps its re-arm delay by the remaining MAX_FALLBACK_MS budget", async () => {
+    // Start the clock 44s into the attempt (1s before the 45s
+    // MAX_FALLBACK_MS deadline) so response headers can "arrive now" without
+    // an earlier, unrelated watchdog tick ever having a chance to fire first.
+    const bg2 = load(undefined, undefined, undefined, { now: bg.MAX_FALLBACK_MS - 1000 });
+    const tabId = 9100;
+    const origin = bg2.SEED_INSTANCES[0];
+
+    bg2.getActiveRedirects().set(tabId, {
+        path: "/jack", tried: [origin], timer: null, switching: false,
+        startedAt: 0, currentOrigin: origin, attemptId: 1
+    });
+
+    // A naive re-arm would wait the full 20s stream timeout (~64s total
+    // elapsed); the capped watchdog must fire within the ~1s actually left.
+    await bg2.onResponseStarted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined });
+
+    await bg2.advance(999);
+    assert.equal(bg2.getTabUpdateCalls().length, 0, "must not fall back before the capped delay elapses");
+
+    await bg2.advance(2);
+    assert.equal(
+        bg2.getTabUpdateCalls().length,
+        1,
+        "must fall back once the absolute MAX_FALLBACK_MS deadline passes, not wait out the full stream timeout"
+    );
+});
+
+test("a hard HTTP failure falls back even when the tab's URL hasn't committed yet", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 9200;
+    const origin = bg2.SEED_INSTANCES[0];
+
+    bg2.getActiveRedirects().set(tabId, {
+        path: "/jack", tried: [origin], timer: null, switching: false,
+        startedAt: 0, currentOrigin: origin, attemptId: 1
+    });
+    // onCompleted (network finished) firing does not mean the tab's URL has
+    // been updated to reflect it yet -- those are two distinct moments, not
+    // one. Leave it unreadable to simulate the gap between them.
+    bg2.setTab(undefined, "loading");
+
+    await bg2.onCompleted({
+        type: "main_frame", tabId, url: origin + "/jack", requestId: undefined,
+        statusCode: 503, responseHeaders: undefined
+    });
+
+    assert.equal(bg2.getLocalHealth()[origin].state, "BROKEN");
+    assert.equal(
+        bg2.getTabUpdateCalls().length,
+        1,
+        "must still fall back or show the terminal page instead of silently abandoning the attempt"
+    );
+});
+
+test("a 403 with a Cloudflare challenge header is not treated as an immediate hard failure", async () => {
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => [false] // check-page.js recognizes the challenge as transient
+    });
+    const tabId = 9300;
+    const origin = bg2.SEED_INSTANCES[0];
+
+    bg2.getActiveRedirects().set(tabId, {
+        path: "/jack", tried: [origin], timer: null, switching: false,
+        startedAt: 0, currentOrigin: origin, attemptId: 1
+    });
+    bg2.setTab(origin + "/jack", "complete");
+
+    await bg2.onCompleted({
+        type: "main_frame", tabId, url: origin + "/jack", requestId: undefined,
+        statusCode: 403, responseHeaders: [{ name: "cf-mitigated", value: "challenge" }]
+    });
+
+    assert.equal(
+        bg2.getLocalHealth()[origin],
+        undefined,
+        "a Cloudflare challenge response must not demote the instance the way a real hard failure would"
+    );
+});
+
+test("a plain 403 with no Cloudflare challenge header is still a hard failure", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 9301;
+    const origin = bg2.SEED_INSTANCES[0];
+
+    bg2.getActiveRedirects().set(tabId, {
+        path: "/jack", tried: [origin], timer: null, switching: false,
+        startedAt: 0, currentOrigin: origin, attemptId: 1
+    });
+
+    await bg2.onCompleted({
+        type: "main_frame", tabId, url: origin + "/jack", requestId: undefined,
+        statusCode: 403, responseHeaders: undefined
     });
 
     assert.equal(bg2.getLocalHealth()[origin].state, "BROKEN");
