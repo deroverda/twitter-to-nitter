@@ -45,8 +45,7 @@ const SEED_INSTANCES = [
     "https://nitter.meowing.monster",
     "https://nitter.netbub.com",
     "https://nitter.miningtcup.me",
-    "https://shitter.thepixora.com",
-    "https://xcancel.com"
+    "https://shitter.thepixora.com"
 ];
 
 // Every https origin the manifest grants host access to, minus the status

@@ -143,14 +143,14 @@ test("parseStatus normalizes domain casing and a trailing dot", () => {
 test("a seed instance without a matching host permission is excluded from ranking", () => {
     const strippedManifest = JSON.parse(JSON.stringify(manifest));
     strippedManifest.permissions = strippedManifest.permissions.filter(
-        p => p !== "https://xcancel.com/*"
+        p => p !== "https://shitter.thepixora.com/*"
     );
     const bg2 = load(strippedManifest);
 
-    assert.ok(!bg2.PERMITTED_ORIGINS.has("https://xcancel.com"));
-    assert.ok(bg2.SEED_INSTANCES.includes("https://xcancel.com"), "the raw seed list itself is unchanged");
+    assert.ok(!bg2.PERMITTED_ORIGINS.has("https://shitter.thepixora.com"));
+    assert.ok(bg2.SEED_INSTANCES.includes("https://shitter.thepixora.com"), "the raw seed list itself is unchanged");
     assert.ok(
-        !Array.from(bg2.candidateOrigins()).includes("https://xcancel.com"),
+        !Array.from(bg2.candidateOrigins()).includes("https://shitter.thepixora.com"),
         "an unpermitted seed must not be redirected to -- its outcome events would be unobservable"
     );
 });
@@ -181,9 +181,9 @@ test("sameAttempt matches on origin plus request id when known", () => {
     assert.equal(bg.sameAttempt(null, "https://a", "5"), false);
 });
 
-test("PERMITTED_ORIGINS is exactly the manifest's nine instance origins", () => {
+test("PERMITTED_ORIGINS is exactly the manifest's eight instance origins", () => {
     const origins = [...bg.PERMITTED_ORIGINS].sort();
-    assert.equal(origins.length, 9);
+    assert.equal(origins.length, 8);
     assert.ok(!origins.includes("https://status.d420.de"));
     for (const seed of bg.SEED_INSTANCES) {
         assert.ok(bg.PERMITTED_ORIGINS.has(seed), `${seed} must be permitted`);
