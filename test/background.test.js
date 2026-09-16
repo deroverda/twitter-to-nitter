@@ -20,10 +20,16 @@ const EXPORTS = [
     "originOf", "isRedirectablePath", "isHardFailure", "isDefinitiveNetworkFailure",
     "parseStatus", "sameAttempt", "candidateOrigins", "freshStatusHosts", "recordLocal",
     "PERMITTED_ORIGINS", "PERMITTED_DOMAINS", "SEED_INSTANCES", "refreshStatus",
-    "noteRedirect", "breakerOpen", "terminalFailurePage"
+    "noteRedirect", "breakerOpen", "terminalFailurePage", "isHTMLResponse",
+    "pickInitialInstance", "templateMismatchTripped", "NAV_TIMEOUT_MS",
+    "NAV_STREAM_TIMEOUT_MS", "MAX_FALLBACK_MS", "readBoundedJSON", "STATUS_MAX_BODY_BYTES"
 ];
 
-function load(manifestOverride, fetchOverride) {
+// A controllable fake clock and timer queue, so watchdog/switchInstance tests
+// can assert on what fires after N virtual milliseconds instead of sleeping
+// in real time. setTimeout here only records {fn, due}; nothing runs until a
+// test calls advance().
+function load(manifestOverride, fetchOverride, randomOverride, options = {}) {
     const noop = () => {};
     const listener = { addListener: noop, removeListener: noop, hasListener: () => false };
 
@@ -37,33 +43,102 @@ function load(manifestOverride, fetchOverride) {
         hasListener: () => false
     };
 
+    // onCompleted/onErrorOccurred/onResponseStarted each get exactly one
+    // real listener; capture it in a box so tests can invoke it directly.
+    function captureListener(box) {
+        return { addListener: (fn) => { box.fn = fn; }, removeListener: noop, hasListener: () => false };
+    }
+    const onCompletedBox = {};
+    const onErrorBox = {};
+    const onResponseStartedBox = {};
+    const onMessageBox = {};
+
+    let clockValue = typeof options.now === "number" ? options.now : Date.now();
+    let timerId = 1;
+    const timers = new Map();
+
+    async function advance(ms) {
+        clockValue += ms;
+
+        const due = Array.from(timers.entries())
+            .filter(([, t]) => t.due <= clockValue)
+            .sort((a, b) => a[1].due - b[1].due);
+
+        for (const [id] of due) {
+            timers.delete(id);
+        }
+
+        for (const [, t] of due) {
+            await t.fn();
+        }
+    }
+
+    const tabState = { url: undefined, status: "loading" };
+    const tabsUpdateCalls = [];
+    const storageData = { ...(options.initialStorage || {}) };
+
     const ctx = {
         console: { log: noop, warn: noop, error: noop },
-        setTimeout: () => 0,
-        clearTimeout: noop,
+        setTimeout: (fn, ms = 0) => {
+            const id = timerId++;
+            timers.set(id, { fn, due: clockValue + ms });
+            return id;
+        },
+        clearTimeout: (id) => { timers.delete(id); },
         setInterval: () => 0,
         clearInterval: noop,
         URL,
+        TextDecoder,
+        Date: { now: () => clockValue },
+        Math: randomOverride ? { random: randomOverride, floor: Math.floor } : Math,
         AbortController: class { constructor() { this.signal = {}; } abort() {} },
         fetch: fetchOverride || (() => Promise.reject(new Error("no network in test"))),
         browser: {
-            runtime: { getManifest: () => manifestOverride || manifest },
+            runtime: {
+                getManifest: () => manifestOverride || manifest,
+                getURL: (path) => `moz-extension://test-id/${path}`,
+                onMessage: captureListener(onMessageBox)
+            },
             webRequest: {
                 onBeforeRequest: trackingListener,
-                onCompleted: listener,
-                onErrorOccurred: listener
+                onCompleted: captureListener(onCompletedBox),
+                onErrorOccurred: captureListener(onErrorBox),
+                onResponseStarted: captureListener(onResponseStartedBox)
             },
             tabs: {
                 onRemoved: listener,
-                get: async () => ({}),
-                update: async () => ({}),
-                executeScript: async () => [false]
+                get: async () => ({ url: tabState.url, status: tabState.status }),
+                query: async () => [{ url: tabState.url, status: tabState.status }],
+                update: async (tabId, opts) => {
+                    tabsUpdateCalls.push({ tabId, ...opts });
+                    return {};
+                },
+                executeScript: options.executeScript || (async () => [false])
             },
             storage: {
                 local: {
-                    get: async () => ({}),
-                    set: async () => {},
-                    remove: async () => {}
+                    get: async (keys) => {
+                        if (!keys) {
+                            return { ...storageData };
+                        }
+
+                        const keyList = Array.isArray(keys) ? keys : [keys];
+                        const result = {};
+
+                        for (const key of keyList) {
+                            if (key in storageData) {
+                                result[key] = storageData[key];
+                            }
+                        }
+
+                        return result;
+                    },
+                    set: async (obj) => { Object.assign(storageData, obj); },
+                    remove: async (keys) => {
+                        for (const key of (Array.isArray(keys) ? keys : [keys])) {
+                            delete storageData[key];
+                        }
+                    }
                 }
             }
         }
@@ -76,9 +151,24 @@ function load(manifestOverride, fetchOverride) {
         getLocalHealth: () => localHealth,
         getActiveRedirects: () => activeRedirects,
         getRanked: () => ranked,
+        getRankedTopTier: () => rankedTopTier,
+        getPreferredInstance: () => preferredInstance,
         recomputeRanking: () => recomputeRanking() };`;
     vm.runInContext(SRC + epilogue, ctx);
-    return { ...ctx.__t, followListener: beforeRequestListeners[1] };
+    return {
+        ...ctx.__t,
+        followListener: beforeRequestListeners[1],
+        interceptListener: beforeRequestListeners[0],
+        onCompleted: (details) => onCompletedBox.fn(details),
+        onErrorOccurred: (details) => onErrorBox.fn(details),
+        onResponseStarted: (details) => onResponseStartedBox.fn(details),
+        sendMessage: (message) => onMessageBox.fn(message),
+        advance,
+        setTab: (url, status) => { tabState.url = url; tabState.status = status || "loading"; },
+        getTabUpdateCalls: () => tabsUpdateCalls,
+        getStorage: () => ({ ...storageData }),
+        pendingTimerCount: () => timers.size
+    };
 }
 
 const bg = load();
@@ -221,6 +311,41 @@ test("a link clicked from inside a Nitter instance is still tracked for fallback
     assert.equal(record.tried[0], "https://nitter.kareem.one");
 });
 
+test("record.path is kept in sync with a followed navigation, not left at its original value", () => {
+    const tabId = 5252;
+
+    bg.followListener({
+        type: "main_frame",
+        tabId: tabId,
+        requestId: "req-a",
+        url: "https://nitter.kareem.one/jack"
+    });
+    assert.equal(bg.getActiveRedirects().get(tabId).path, "/jack");
+
+    bg.followListener({
+        type: "main_frame",
+        tabId: tabId,
+        requestId: "req-b",
+        url: "https://nitter.kareem.one/jack/status/123"
+    });
+    assert.equal(
+        bg.getActiveRedirects().get(tabId).path,
+        "/jack/status/123",
+        "a later navigation on the same tracked attempt must update record.path, so a subsequent timeout falls back to the page the user is actually on"
+    );
+});
+
+test("isHTMLResponse only judges text/html, defaults to true when the header is missing or malformed", () => {
+    const htmlHeaders = [{ name: "Content-Type", value: "text/html; charset=utf-8" }];
+    const imageHeaders = [{ name: "content-type", value: "image/jpeg" }];
+
+    assert.equal(bg.isHTMLResponse(htmlHeaders), true);
+    assert.equal(bg.isHTMLResponse(imageHeaders), false, "a directly-opened image must not be judged by check-page.js");
+    assert.equal(bg.isHTMLResponse([]), true, "no content-type header present: default to checking");
+    assert.equal(bg.isHTMLResponse(undefined), true, "responseHeaders unavailable: default to checking");
+    assert.equal(bg.isHTMLResponse([{ name: "Content-Type" }]), true, "malformed header value: default to checking");
+});
+
 test("isDefinitiveNetworkFailure only matches genuine network-level errors", () => {
     for (const error of ["NS_ERROR_NET_TIMEOUT", "NS_ERROR_NET_RESET", "NS_ERROR_CONNECTION_REFUSED", "NS_ERROR_UNKNOWN_HOST"]) {
         assert.equal(bg.isDefinitiveNetworkFailure(error), true, `expected ${error} to be a definitive network failure`);
@@ -259,14 +384,40 @@ test("refreshStatus rejects an oversized response before parsing it", async () =
     );
 });
 
-test("terminalFailurePage builds a self-contained data: URL with an escaped retry link", () => {
+test("terminalFailurePage returns a packaged extension page, not a data: URL", () => {
     const url = bg.terminalFailurePage("/jack/status/1?ref=<script>");
 
-    assert.ok(url.startsWith("data:text/html;charset=utf-8,"));
+    assert.ok(
+        url.startsWith("moz-extension://test-id/terminal-failure.html?path="),
+        "must be an extension-page URL -- Firefox's tabs.update() rejects data: URLs outright"
+    );
+    assert.ok(
+        url.includes(encodeURIComponent("/jack/status/1?ref=<script>")),
+        "original path must survive URL encoding"
+    );
+});
 
-    const html = decodeURIComponent(url.slice("data:text/html;charset=utf-8,".length));
-    assert.ok(html.includes("https://x.com/jack/status/1?ref=&lt;script&gt;"));
-    assert.ok(!html.includes("<script>"), "path must be HTML-escaped before embedding");
+test("pickInitialInstance spreads picks across the fully-healthy tier instead of always the top-ranked instance", () => {
+    const picks = [0, 0.99];
+    let i = 0;
+    const bg2 = load(undefined, undefined, () => picks[i++ % picks.length]);
+
+    const topTier = bg2.getRankedTopTier();
+    assert.ok(topTier.length > 1, "seed instances with no local/remote failure signal should all be in the top tier");
+
+    assert.equal(bg2.pickInitialInstance(), topTier[0]);
+    assert.equal(bg2.pickInitialInstance(), topTier[topTier.length - 1]);
+});
+
+test("pickInitialInstance falls back to the strict top pick once every candidate is locally broken", () => {
+    const bg2 = load();
+
+    for (const seed of bg2.SEED_INSTANCES) {
+        bg2.recordLocal(seed, "BROKEN");
+    }
+
+    assert.equal(bg2.getRankedTopTier().length, 0, "every candidate is locally broken, so the top tier is empty");
+    assert.equal(bg2.pickInitialInstance(), bg2.getRanked()[0]);
 });
 
 test("recordLocal keeps BROKEN entries and drops cleared ones", () => {
@@ -275,4 +426,297 @@ test("recordLocal keeps BROKEN entries and drops cleared ones", () => {
 
     bg.recordLocal("https://nitter.kareem.one", "OK");
     assert.ok(!("https://nitter.kareem.one" in bg.getLocalHealth()));
+});
+
+// ============================================================
+// Watchdog / switchInstance state machine, driven by the fake clock
+// ============================================================
+
+test("a pure timeout with no response at all falls back once NAV_TIMEOUT_MS elapses", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6000;
+
+    bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack" });
+    assert.equal(bg2.getTabUpdateCalls().length, 0, "must not fall back before the watchdog fires");
+
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+
+    assert.equal(bg2.getTabUpdateCalls().length, 1, "the dead-timeout must fall back once it elapses");
+});
+
+test("onResponseStarted re-arms the watchdog at the longer streaming timeout instead of treating a slow response as dead", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6001;
+
+    const redirect = bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack" });
+    const origin = new URL(redirect.redirectUrl).origin;
+
+    await bg2.onResponseStarted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined });
+
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+    assert.equal(
+        bg2.getTabUpdateCalls().length,
+        0,
+        "the short dead-timeout must not fire once headers have started arriving"
+    );
+
+    await bg2.advance(bg2.NAV_STREAM_TIMEOUT_MS - bg2.NAV_TIMEOUT_MS);
+    assert.equal(
+        bg2.getTabUpdateCalls().length,
+        1,
+        "the longer streaming timeout should still fall back if the response never finishes"
+    );
+});
+
+test("switchInstance bounds total fallback time by elapsed wall-clock time, not just instance count", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6002;
+
+    bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack" });
+
+    let iterations = 0;
+
+    while (bg2.getActiveRedirects().has(tabId) && iterations < bg2.SEED_INSTANCES.length + 2) {
+        await bg2.advance(bg2.NAV_TIMEOUT_MS);
+        iterations++;
+    }
+
+    assert.ok(
+        !bg2.getActiveRedirects().has(tabId),
+        "the attempt must end once MAX_FALLBACK_MS is exceeded, even with untried candidates left"
+    );
+    assert.ok(
+        iterations < bg2.SEED_INSTANCES.length,
+        "it must stop well before exhausting every seed instance by count"
+    );
+
+    const lastUpdate = bg2.getTabUpdateCalls().at(-1);
+    assert.ok(
+        lastUpdate.url.includes("terminal-failure.html"),
+        "must land on the terminal failure page, not just stop silently"
+    );
+});
+
+test("an 'unknown' page-template verdict falls back without demoting the instance, and trips the tripwire after enough distinct instances", async () => {
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => ["unknown"]
+    });
+
+    const origins = bg2.SEED_INSTANCES.slice(0, 4);
+    assert.equal(bg2.templateMismatchTripped(), false);
+
+    for (let i = 0; i < origins.length; i++) {
+        const tabId = 8000 + i;
+        const origin = origins[i];
+
+        bg2.getActiveRedirects().set(tabId, {
+            path: "/jack",
+            tried: [origin],
+            timer: null,
+            switching: false,
+            startedAt: 0,
+            currentOrigin: origin
+        });
+        bg2.setTab(origin + "/jack", "complete");
+
+        await bg2.onCompleted({
+            type: "main_frame",
+            tabId,
+            url: origin + "/jack",
+            requestId: undefined,
+            statusCode: 200,
+            responseHeaders: undefined
+        });
+
+        assert.equal(
+            bg2.getLocalHealth()[origin],
+            undefined,
+            "an 'unknown' verdict must never demote the instance fleet-wide"
+        );
+    }
+
+    assert.equal(
+        bg2.templateMismatchTripped(),
+        true,
+        `${origins.length} distinct instances judged unknown within the window should trip the diagnostic tripwire`
+    );
+});
+
+test("a confirmed 'fail' verdict still demotes the instance fleet-wide", async () => {
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => ["fail"]
+    });
+    const tabId = 8100;
+    const origin = bg2.SEED_INSTANCES[0];
+
+    bg2.getActiveRedirects().set(tabId, {
+        path: "/jack",
+        tried: [origin],
+        timer: null,
+        switching: false,
+        startedAt: 0,
+        currentOrigin: origin
+    });
+    bg2.setTab(origin + "/jack", "complete");
+
+    await bg2.onCompleted({
+        type: "main_frame",
+        tabId,
+        url: origin + "/jack",
+        requestId: undefined,
+        statusCode: 200,
+        responseHeaders: undefined
+    });
+
+    assert.equal(bg2.getLocalHealth()[origin].state, "BROKEN");
+});
+
+// ============================================================
+// readBoundedJSON -- status response size guard
+// ============================================================
+
+test("readBoundedJSON enforces the size guard even without a Content-Length header (chunked bypass)", async () => {
+    const oversized = new Uint8Array(bg.STATUS_MAX_BODY_BYTES + 1);
+    let delivered = false;
+    const reader = {
+        read: async () => {
+            if (delivered) {
+                return { done: true, value: undefined };
+            }
+            delivered = true;
+            return { done: false, value: oversized };
+        },
+        cancel: async () => {}
+    };
+
+    await assert.rejects(() => bg.readBoundedJSON({ body: { getReader: () => reader } }, bg.STATUS_MAX_BODY_BYTES));
+});
+
+test("readBoundedJSON parses a normal streamed body under the size guard", async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ hosts: [] }));
+    let delivered = false;
+    const reader = {
+        read: async () => {
+            if (delivered) {
+                return { done: true, value: undefined };
+            }
+            delivered = true;
+            return { done: false, value: bytes };
+        },
+        cancel: async () => {}
+    };
+
+    const parsed = await bg.readBoundedJSON({ body: { getReader: () => reader } }, bg.STATUS_MAX_BODY_BYTES);
+    // JSON.parse ran inside the vm context, so the result is a cross-realm
+    // object; assert.deepEqual's identity checks on it are unreliable
+    // (see Node's "same structure but not reference-equal" special case).
+    assert.equal(JSON.stringify(parsed), JSON.stringify({ hosts: [] }));
+});
+
+// ============================================================
+// Preferred instance -- popup messaging and pickInitialInstance bias
+// ============================================================
+
+function flushMicrotasks() {
+    return new Promise((resolve) => setImmediate(resolve));
+}
+
+test("pickInitialInstance prefers a set instance while it's healthy", async () => {
+    const bg2 = load(undefined, undefined, () => 0.99); // would otherwise pick the last top-tier entry
+    await flushMicrotasks(); // let init()'s own storage read settle before this test's writes
+    const preferred = bg2.SEED_INSTANCES[2];
+
+    const setResult = await bg2.sendMessage({ type: "setPreferred", origin: preferred });
+    assert.equal(setResult.preferredInstance, preferred);
+    assert.equal(bg2.getPreferredInstance(), preferred);
+
+    assert.equal(bg2.pickInitialInstance(), preferred);
+});
+
+test("pickInitialInstance falls through to the normal spread once the preferred instance is broken", async () => {
+    const bg2 = load();
+    await flushMicrotasks();
+    const preferred = bg2.SEED_INSTANCES[0];
+
+    await bg2.sendMessage({ type: "setPreferred", origin: preferred });
+    bg2.recordLocal(preferred, "BROKEN");
+
+    assert.notEqual(
+        bg2.pickInitialInstance(),
+        preferred,
+        "a down preferred instance must never be forced -- normal fallback selection takes over"
+    );
+    assert.equal(
+        bg2.getPreferredInstance(),
+        preferred,
+        "the preference itself must stay set so it resumes once the instance recovers"
+    );
+});
+
+test("setPreferred rejects an origin outside the permitted set", async () => {
+    const bg2 = load();
+    await flushMicrotasks();
+
+    const result = await bg2.sendMessage({ type: "setPreferred", origin: "https://evil.example" });
+
+    assert.equal(result, undefined);
+    assert.equal(bg2.getPreferredInstance(), null);
+});
+
+test("clearPreferred resets state and removes the stored key", async () => {
+    const bg2 = load();
+    await flushMicrotasks();
+    const preferred = bg2.SEED_INSTANCES[0];
+
+    await bg2.sendMessage({ type: "setPreferred", origin: preferred });
+    assert.ok("preferredInstance" in bg2.getStorage());
+
+    const result = await bg2.sendMessage({ type: "clearPreferred" });
+    assert.equal(result.preferredInstance, null);
+    assert.equal(bg2.getPreferredInstance(), null);
+    assert.ok(!("preferredInstance" in bg2.getStorage()));
+});
+
+test("getPopupState reports the active tab's origin only when it's a permitted Nitter instance", async () => {
+    const bg2 = load();
+    await flushMicrotasks();
+    const preferred = bg2.SEED_INSTANCES[1];
+    await bg2.sendMessage({ type: "setPreferred", origin: preferred });
+
+    bg2.setTab(preferred + "/jack", "complete");
+    let state = await bg2.sendMessage({ type: "getPopupState" });
+    assert.equal(state.currentOrigin, preferred);
+    assert.equal(state.preferredInstance, preferred);
+
+    bg2.setTab("https://example.com/", "complete");
+    state = await bg2.sendMessage({ type: "getPopupState" });
+    assert.equal(state.currentOrigin, null, "a non-Nitter tab must not be reported as the current origin");
+});
+
+test("init() loads a valid stored preference, but discards one that's no longer a permitted origin", async () => {
+    const validBg = load(undefined, undefined, undefined, {
+        initialStorage: { preferredInstance: "https://nitter.kareem.one" }
+    });
+    await flushMicrotasks();
+    assert.equal(validBg.getPreferredInstance(), "https://nitter.kareem.one");
+
+    const staleBg = load(undefined, undefined, undefined, {
+        initialStorage: { preferredInstance: "https://no-longer-permitted.example" }
+    });
+    await flushMicrotasks();
+    assert.equal(
+        staleBg.getPreferredInstance(),
+        null,
+        "a stored preference for an origin that's no longer permitted must be discarded, not applied"
+    );
+});
+
+test("readBoundedJSON falls back to response.json() when no streaming body reader is available", async () => {
+    const parsed = await bg.readBoundedJSON(
+        { json: async () => ({ hosts: [] }) },
+        bg.STATUS_MAX_BODY_BYTES
+    );
+    assert.deepEqual(parsed, { hosts: [] });
 });

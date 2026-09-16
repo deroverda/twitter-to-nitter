@@ -5,11 +5,21 @@
 // which sends "default-src 'none'". A file-based content script isn't
 // subject to the page's CSP the same way an inline one is.
 //
-// Returns true when the loaded page is an instance-level failure the
-// extension should fall away from, false for anything it should leave alone
-// (a real page, a "not found" result, or a challenge page still resolving).
+// Returns one of three values: false when the page is fine (a real page, a
+// "not found" result, or a challenge page still resolving); "fail" for a
+// confidently-identified instance failure (a named rate-limit/auth phrase, in
+// content or Nitter's own error panel); "unknown" when the page merely
+// doesn't look like Nitter's template at all. "unknown" still triggers
+// fallback for this navigation (the page isn't usable either way), but the
+// caller never treats it as a confirmed fleet-wide failure -- a real Nitter
+// template change would otherwise get every instance judged broken at once.
 (() => {
-    const INSTANCE_FAILURE_PHRASES = ["rate limited", "no auth tokens"];
+    // "rate limit" (no "-ed") also matches "rate limit exceeded" and "rate
+    // limiting", wordings "rate limited" alone missed. The gates below
+    // (structural .error-panel match, or no-content-rendered for the body
+    // scan) already carry the false-positive protection that justified the
+    // narrower phrase, so broadening it here doesn't weaken either gate.
+    const INSTANCE_FAILURE_PHRASES = ["rate limit", "no auth tokens", "too many requests"];
 
     // 1. Anti-bot interstitial still resolving. This is transient -- it turns
     //    into a real Nitter page once the challenge passes -- so it is not a
@@ -46,7 +56,7 @@
     //    rendered -- a real tweet or bio could quote "rate limited". This
     //    catches forks that render the error outside a .error-panel.
     if (!hasContent && INSTANCE_FAILURE_PHRASES.some(phrase => bodyText.includes(phrase))) {
-        return true;
+        return "fail";
     }
 
     // 5. Nitter's own error panel. It is also used for "user not found" /
@@ -63,7 +73,7 @@
     if (panel) {
         const text = (panel.textContent || "").toLowerCase();
 
-        return INSTANCE_FAILURE_PHRASES.some(phrase => text.includes(phrase));
+        return INSTANCE_FAILURE_PHRASES.some(phrase => text.includes(phrase)) ? "fail" : false;
     }
 
     // 6. Doesn't render as Nitter at all: an operator's own shutdown or
@@ -76,5 +86,5 @@
         document.querySelector(".inner-nav")
     );
 
-    return !looksLikeNitter;
+    return looksLikeNitter ? false : "unknown";
 })();

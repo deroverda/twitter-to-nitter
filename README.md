@@ -17,7 +17,7 @@ A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working N
 The request to X is **intercepted before it leaves your browser**. You never watch X load first, and X never receives the navigation.
 
 > [!NOTE]
-> **August 2026 cease-and-desist, and the September recovery.** On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter), and most public instances shut down. In early September 2026, after legal advice, upstream development resumed ("Nitter lives") and instances began coming back. This extension now tracks the [live instance health service](https://status.d420.de/) directly, activating and dropping instances as the fleet moves (see [Instances](#instances)). The fleet is still smaller and less stable than before the C&D; if every instance it can reach is down, you'll see a broken page rather than X.
+> **August 2026 cease-and-desist, and the September recovery.** On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and of the upstream [Nitter project itself](https://github.com/zedeus/nitter), and most public instances shut down. In early September 2026, after legal advice, the project announced it would continue ("Nitter lives") and instances began coming back. The upstream GitHub repository was subsequently archived (11 September 2026); individual Nitter-compatible instances remain separately operated regardless. This extension now tracks the [live instance health service](https://status.d420.de/) directly, activating and dropping instances as the fleet moves (see [Instances](#instances)). The fleet is still smaller and less stable than before the C&D; if every instance it can reach is down, you'll see a broken page rather than X.
 
 > **Firefox Add-ons (AMO):** No public listing planned for now. Releases are private, unlisted signed builds (see Install below).
 
@@ -35,6 +35,8 @@ When you open an X/Twitter link:
 1. The request is intercepted and redirected to a Nitter instance **before it is sent**. The decision is instant - nothing is fetched or checked first.
 2. Which instance you get is decided from a locally cached ranking, refreshed in the background.
 3. If that instance turns out to be unusable for you - rate limited, blocked, unreachable - the extension notices and moves you to the next candidate.
+
+**Preferred instance.** Click the toolbar icon while on a Nitter page to keep landing there on future redirects - useful because per-instance display settings and capabilities (RSS, NSFW support) don't follow you across an automatic switch, and the automatic ranking has no way to know about either. This only biases which instance a *fresh* redirect picks; if your preferred instance goes down, normal fallback still happens exactly as it would without one, and the preference itself stays set for whenever that instance recovers.
 
 The candidate list itself is driven by two independent sources:
 
@@ -111,7 +113,7 @@ No telemetry, no analytics, no tracking, no backend of ours.
 - **Your URL goes to one Nitter instance at a time** - the one you are redirected to. That instance is a third party and it necessarily sees what you asked it for. If that instance fails, the extension falls back to another permitted instance, so the same path may reach more than one instance sequentially over the course of one navigation - never simultaneously, and never to any domain outside the permitted superset listed above.
 - **The health service receives no browsing data.** The extension requests one fixed URL with no parameters and no cookies, on a timer, identical for every user and unrelated to what you browse. It is never contacted as part of a navigation.
 - **The extension sends no probe traffic to Nitter instances.** Instance health is learned from pages you loaded anyway.
-- **The extension checks the loaded page for a small set of structural signals: whether it looks like a genuine Nitter page at all, and if so, whether Nitter's own error panel names a known instance-level failure.** This runs on every navigation to a Nitter instance the extension has host permission for, not just its own redirects. The rest of the page - what you searched for, whose profile you viewed, the actual tweet content - is never read, stored, or sent anywhere; the check only ever produces a true/false result kept in memory for that one decision.
+- **The extension checks the loaded page for a small set of structural signals: whether it looks like a genuine Nitter page at all, and if so, whether Nitter's own error panel names a known instance-level failure.** This runs on every navigation to a Nitter instance the extension has host permission for, not just its own redirects. The rest of the page - what you searched for, whose profile you viewed, the actual tweet content - is never read, stored, or sent anywhere; the check only ever produces a pass/fail/unknown result kept in memory for that one decision.
 - Instance health and ranking are stored locally and never leave your browser.
 
 One limitation is outside this extension's control: some Nitter instances do not proxy media. On those, your browser loads images and video directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), so Twitter-owned infrastructure still sees which profile and media you viewed. Whether media is proxied is the instance operator's choice, not something a redirector can change. If that matters to you, prefer an instance with proxying enabled, or run your own.
@@ -122,9 +124,11 @@ One limitation is outside this extension's control: some Nitter instances do not
 - The health service can activate and drop instances live, but only within the fixed permitted superset in `manifest.json`. A genuinely new domain still needs an updated build.
 - On instances that do not proxy media, media still loads from Twitter's CDN. See Privacy above.
 - `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, and `/privacy` stay on X, because Nitter has no equivalent for them.
+- Pressing Back after a fallback switched instances can re-trigger the same fallback: the browser reloads the page you were switched away from, which the extension still treats as the tracked attempt.
+- The page-failure phrases the extension looks for ("rate limit", "no auth tokens", "too many requests") are English only. An instance whose error page is rendered in another language will not be recognized as failed by that check; the structural signals (no content rendered, doesn't look like Nitter's template at all) still catch it.
 
 ## No runtime dependencies
 
-What ships is just `manifest.json`, `background.js`, and `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection). No build step, no framework, nothing bundled.
+What ships is just `manifest.json`, `background.js`, `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection), and `terminal-failure.html`/`terminal-failure.js` (the page shown when every configured instance has failed - a packaged extension page rather than a `data:` URL, since Firefox's `tabs.update()` rejects `data:` URLs outright). No build step, no framework, nothing bundled.
 
 The repo also has a `test/` harness that runs on `node --test` (`npm test`), with one dev-only dependency (`linkedom`) for parsing HTML fixtures. It is not part of the extension and is excluded from the packaged `.xpi`.

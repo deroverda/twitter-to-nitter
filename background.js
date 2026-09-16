@@ -108,16 +108,10 @@ const TWITTER_HOSTS = new Set([
     "m.x.com"
 ]);
 
-const TWITTER_URL_PATTERNS = [
-    "*://twitter.com/*",
-    "*://www.twitter.com/*",
-    "*://mobile.twitter.com/*",
-    "*://m.twitter.com/*",
-    "*://x.com/*",
-    "*://www.x.com/*",
-    "*://mobile.x.com/*",
-    "*://m.x.com/*"
-];
+// Derived from TWITTER_HOSTS rather than hand-maintained as a second list:
+// an edit that added a host to one and not the other would silently break
+// either interception or fallback observation for it.
+const TWITTER_URL_PATTERNS = Array.from(TWITTER_HOSTS, host => `*://${host}/*`);
 
 // Covers every instance the extension could ever redirect to, so the outcome
 // listeners fire for status-service-added instances too, not just seed ones.
@@ -165,10 +159,34 @@ const STATUS_MAX_BODY_BYTES = 1 * 1024 * 1024;
 // How long a locally observed hard failure keeps an instance demoted.
 const LOCAL_FAILURE_TTL_MS = 30 * 60 * 1000;
 
+// check-page.js's "unknown" verdict (the page doesn't render as Nitter at
+// all) never demotes an instance by itself -- see the tripwire below for why.
+// If enough distinct instances hit it in a short window, that is far more
+// likely a Nitter template change tripping the detector than a simultaneous
+// fleet-wide outage; this is purely a diagnostic signal (a console.warn) so
+// whoever is debugging fallback behavior can tell the two apart.
+const TEMPLATE_MISMATCH_WINDOW_MS = 2 * 60 * 1000;
+const TEMPLATE_MISMATCH_TRIP_THRESHOLD = 4;
+const TEMPLATE_MISMATCH_COOLDOWN_MS = 30 * 60 * 1000;
+
 // If a redirected navigation neither completes nor errors within this window,
 // treat the instance as hanging and move on. Firefox's own network timeout is
 // far too long to leave the user staring at a blank tab.
 const NAV_TIMEOUT_MS = 8000;
+
+// Once onResponseStarted fires, the instance has proven it is alive -- a slow
+// response is not the same failure as a dead one, and re-arming the watchdog
+// at the short NAV_TIMEOUT_MS would still yank the user off a page that is
+// genuinely loading, just under load. This window only applies after headers
+// have arrived; a response that starts but never finishes still gets cut off.
+const NAV_STREAM_TIMEOUT_MS = 20000;
+
+// Caps worst-case wait for a single navigation regardless of how many
+// instances are configured -- trying every candidate at NAV_STREAM_TIMEOUT_MS
+// each would let a large fleet leave the user staring at a blank tab for
+// minutes. Once elapsed time since the navigation started exceeds this, the
+// terminal failure page is shown even if untried candidates remain.
+const MAX_FALLBACK_MS = 45000;
 
 // Circuit breaker against pathological redirect loops. The only realistic
 // live trigger is rapid *legitimate* X clicks (noteRedirect counts every new
@@ -183,6 +201,7 @@ const LOOP_SUPPRESS_MS = 10000;
 
 const STATUS_KEY = "statusCache";
 const HEALTH_KEY = "instanceHealth";
+const PREFERRED_KEY = "preferredInstance";
 const LEGACY_KEYS = ["workingInstance"];
 
 
@@ -201,7 +220,17 @@ let statusBackoffUntil = 0;
 
 let localHealth = {};
 
+// Set only from the popup (see the runtime.onMessage listener below). Biases
+// a fresh redirect toward this origin when it's healthy; never forces it --
+// a down or since-removed preferred instance just falls through to the
+// normal spread/ranking below, same as if nothing were preferred.
+let preferredInstance = null;
+
+let templateMismatchEvents = [];
+let templateMismatchTrippedUntil = 0;
+
 let ranked = SAFE_SEED_INSTANCES.slice();
+let rankedTopTier = SAFE_SEED_INSTANCES.slice();
 
 
 // ============================================================
@@ -270,30 +299,39 @@ function locallyBroken(origin, now) {
 function recomputeRanking() {
     const now = Date.now();
 
-    ranked = candidateOrigins()
-        .map((origin, index) => {
-            const info = statusFor(origin);
+    const scored = candidateOrigins().map((origin, index) => {
+        const info = statusFor(origin);
 
-            return {
-                origin: origin,
-                broken: locallyBroken(origin, now) ? 1 : 0,
-                unhealthy: info ? (info.healthy ? 0 : 1) : 0,
-                unknown: info ? 0 : 1,
-                badHost: info && info.isBadHost ? 1 : 0,
-                points: info && typeof info.points === "number" ? info.points : -1,
-                ping: info && typeof info.ping === "number" ? info.ping : Number.MAX_SAFE_INTEGER,
-                index: index
-            };
-        })
-        .sort((a, b) =>
-            a.broken - b.broken ||
-            a.unhealthy - b.unhealthy ||
-            a.badHost - b.badHost ||
-            a.unknown - b.unknown ||
-            b.points - a.points ||
-            a.ping - b.ping ||
-            a.index - b.index
-        )
+        return {
+            origin: origin,
+            broken: locallyBroken(origin, now) ? 1 : 0,
+            unhealthy: info ? (info.healthy ? 0 : 1) : 0,
+            unknown: info ? 0 : 1,
+            badHost: info && info.isBadHost ? 1 : 0,
+            points: info && typeof info.points === "number" ? info.points : -1,
+            ping: info && typeof info.ping === "number" ? info.ping : Number.MAX_SAFE_INTEGER,
+            index: index
+        };
+    });
+
+    scored.sort((a, b) =>
+        a.broken - b.broken ||
+        a.unhealthy - b.unhealthy ||
+        a.badHost - b.badHost ||
+        a.unknown - b.unknown ||
+        b.points - a.points ||
+        a.ping - b.ping ||
+        a.index - b.index
+    );
+
+    ranked = scored.map(entry => entry.origin);
+
+    // Every candidate with no known problem at all -- not locally broken, not
+    // reported unhealthy by the status service. Kept separately so a fresh
+    // redirect can be spread across all of them instead of always landing on
+    // whichever one happens to sort first; see pickInitialInstance().
+    rankedTopTier = scored
+        .filter(entry => entry.broken === 0 && entry.unhealthy === 0)
         .map(entry => entry.origin);
 }
 
@@ -307,6 +345,32 @@ function pickInstance(exclude) {
     }
 
     return null;
+}
+
+// Used only for a brand-new X interception, never for within-navigation
+// fallback (switchInstance keeps pickInstance's strict ranked order there --
+// a failing attempt should retry the next-best *known* candidate
+// deterministically, not gamble again). Spreading fresh redirects uniformly
+// across every fully-healthy candidate, instead of always the single
+// top-ranked one, avoids concentrating every user on one instance -- the
+// dominant real failure mode (per-instance rate limiting) is exactly the
+// kind of load this creates. Falls back to the strict top pick when nothing
+// qualifies as fully healthy, so there is no path where the absence of a
+// clean instance lets X through.
+function pickInitialInstance() {
+    // A user-set preference wins over the random spread, but only while it's
+    // actually healthy -- rankedTopTier already excludes anything locally
+    // broken or reported unhealthy, so this can never strand a tab on a known
+    // -bad instance just because it was preferred.
+    if (preferredInstance && rankedTopTier.includes(preferredInstance)) {
+        return preferredInstance;
+    }
+
+    if (rankedTopTier.length > 0) {
+        return rankedTopTier[Math.floor(Math.random() * rankedTopTier.length)];
+    }
+
+    return pickInstance();
 }
 
 
@@ -349,6 +413,41 @@ function parseStatus(payload) {
     }
 
     return Object.keys(hosts).length > 0 ? hosts : null;
+}
+
+// Enforces STATUS_MAX_BODY_BYTES while the body is being read, not just on
+// the (optional, chunked-transfer-encoding responses omit it) Content-Length
+// header. Falls back to response.json() when the runtime has no streaming
+// body reader, relying on the Content-Length check that already ran.
+async function readBoundedJSON(response, maxBytes) {
+    if (!response.body || typeof response.body.getReader !== "function") {
+        return response.json();
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let received = 0;
+
+    for (;;) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        received += value.byteLength;
+
+        if (received > maxBytes) {
+            reader.cancel().catch(() => {});
+            throw new Error("status response exceeded size guard");
+        }
+
+        text += decoder.decode(value, { stream: true });
+    }
+
+    text += decoder.decode();
+    return JSON.parse(text);
 }
 
 function persistStatus() {
@@ -405,7 +504,21 @@ async function refreshStatus() {
             return;
         }
 
-        const parsed = parseStatus(await response.json());
+        // Content-Length is absent for a chunked-transfer-encoding response,
+        // which would otherwise let the guard above be skipped entirely and
+        // the whole body get buffered by response.json() regardless of size.
+        // Enforce the same cap while reading, so the guard holds either way.
+        let json;
+
+        try {
+            json = await readBoundedJSON(response, STATUS_MAX_BODY_BYTES);
+        } catch {
+            statusBackoffUntil = Date.now() + STATUS_RETRY_MS;
+            console.warn("[Twitter → Nitter] Status response exceeded size guard or was malformed; ignoring.");
+            return;
+        }
+
+        const parsed = parseStatus(json);
 
         if (!parsed) {
             statusBackoffUntil = Date.now() + STATUS_RETRY_MS;
@@ -439,12 +552,43 @@ function recordLocal(origin, state) {
     if (state === "BROKEN") {
         localHealth[origin] = { state: state, at: Date.now() };
     } else {
+        // The common case -- every successful navigation calls this -- is an
+        // instance that was already not marked broken. Skip the write and
+        // re-rank entirely when there is nothing to clear.
+        if (!localHealth[origin]) {
+            return;
+        }
+
         delete localHealth[origin];
     }
 
     recomputeRanking();
 
     browser.storage.local.set({ [HEALTH_KEY]: localHealth }).catch(() => {});
+}
+
+function templateMismatchTripped() {
+    return Date.now() < templateMismatchTrippedUntil;
+}
+
+function noteTemplateMismatch(origin) {
+    const now = Date.now();
+
+    templateMismatchEvents = templateMismatchEvents.filter(
+        event => (now - event.at) < TEMPLATE_MISMATCH_WINDOW_MS
+    );
+    templateMismatchEvents.push({ origin, at: now });
+
+    const distinctOrigins = new Set(templateMismatchEvents.map(event => event.origin));
+
+    if (distinctOrigins.size >= TEMPLATE_MISMATCH_TRIP_THRESHOLD && !templateMismatchTripped()) {
+        templateMismatchTrippedUntil = now + TEMPLATE_MISMATCH_COOLDOWN_MS;
+        console.warn(
+            `[Twitter → Nitter] ${distinctOrigins.size} distinct instances stopped matching Nitter's ` +
+            `page template within ${TEMPLATE_MISMATCH_WINDOW_MS / 1000}s -- likely a template change ` +
+            "tripping the detector, not a real fleet-wide outage."
+        );
+    }
 }
 
 // A 404 is Nitter answering that a user or tweet does not exist; that is a
@@ -481,9 +625,16 @@ async function init() {
     try {
         await browser.storage.local.remove(LEGACY_KEYS);
 
-        const stored = await browser.storage.local.get([STATUS_KEY, HEALTH_KEY]);
+        const stored = await browser.storage.local.get([STATUS_KEY, HEALTH_KEY, PREFERRED_KEY]);
         const cachedStatus = stored && stored[STATUS_KEY];
         const cachedHealth = (stored && stored[HEALTH_KEY]) || {};
+
+        // Only honor a stored preference that's still a real permitted
+        // origin -- a manifest edit since it was set could otherwise leave a
+        // stale value pointing at something no longer redirectable to.
+        if (stored && typeof stored[PREFERRED_KEY] === "string" && PERMITTED_ORIGINS.has(stored[PREFERRED_KEY])) {
+            preferredInstance = stored[PREFERRED_KEY];
+        }
 
         // Merge into whatever localHealth already holds rather than resetting
         // it: a real navigation's recordLocal() can land while the storage
@@ -517,6 +668,45 @@ async function init() {
 
 init();
 setInterval(refreshStatus, STATUS_REFRESH_MS);
+
+
+// ============================================================
+// Popup messaging
+//
+// The popup never touches storage directly -- background.js is the single
+// owner of every persisted key, same as status/health above. It only ever
+// asks "what's the state" and "change the preference"; this is the only
+// place either happens.
+// ============================================================
+
+browser.runtime.onMessage.addListener(async (message) => {
+    if (!message || typeof message.type !== "string") {
+        return undefined;
+    }
+
+    if (message.type === "getPopupState") {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        const currentOrigin = tab && tab.url ? originOf(tab.url) : null;
+
+        return { currentOrigin, preferredInstance };
+    }
+
+    if (message.type === "setPreferred" && typeof message.origin === "string" && PERMITTED_ORIGINS.has(message.origin)) {
+        preferredInstance = message.origin;
+        browser.storage.local.set({ [PREFERRED_KEY]: preferredInstance }).catch(() => {});
+
+        return { preferredInstance };
+    }
+
+    if (message.type === "clearPreferred") {
+        preferredInstance = null;
+        browser.storage.local.remove(PREFERRED_KEY).catch(() => {});
+
+        return { preferredInstance };
+    }
+
+    return undefined;
+});
 
 
 // ============================================================
@@ -604,17 +794,28 @@ browser.webRequest.onBeforeRequest.addListener(
             return {};
         }
 
+        // A new X navigation that ends up loading real X (unsupported path,
+        // breaker open, or no candidate instance) supersedes whatever Nitter
+        // attempt this tab was tracking. Clear it here rather than leaving it
+        // for the watchdog to time out later and yank the tab back to Nitter
+        // once the user is already looking at the X page they landed on.
         if (!TWITTER_HOSTS.has(url.hostname) || !isRedirectablePath(url.pathname)) {
+            clearWatchdog(details.tabId);
+            activeRedirects.delete(details.tabId);
             return {};
         }
 
         if (breakerOpen(details.tabId)) {
+            clearWatchdog(details.tabId);
+            activeRedirects.delete(details.tabId);
             return {};
         }
 
-        const origin = pickInstance();
+        const origin = pickInitialInstance();
 
         if (!origin) {
+            clearWatchdog(details.tabId);
+            activeRedirects.delete(details.tabId);
             return {};
         }
 
@@ -624,7 +825,7 @@ browser.webRequest.onBeforeRequest.addListener(
         // doing before; clear any watchdog left over from that prior attempt
         // so it can't fire later and act on this new record instead.
         clearWatchdog(details.tabId);
-        activeRedirects.set(details.tabId, { path: path, tried: [origin], timer: null, switching: false });
+        activeRedirects.set(details.tabId, { path: path, tried: [origin], timer: null, switching: false, startedAt: Date.now() });
         noteRedirect(details.tabId);
         armWatchdog(details.tabId, origin);
 
@@ -675,7 +876,7 @@ function clearWatchdog(tabId) {
     }
 }
 
-function armWatchdog(tabId, origin) {
+function armWatchdog(tabId, origin, timeoutMs = NAV_TIMEOUT_MS) {
     const record = activeRedirects.get(tabId);
 
     if (!record) {
@@ -708,15 +909,23 @@ function armWatchdog(tabId, origin) {
                 }
             }
 
-            // No readable URL: the tab is on an unpermitted site, i.e. the
-            // user navigated away. Or: finished loading a *different permitted
+            // No readable URL has two distinct causes that "complete" tells
+            // apart: the tab already finished loading an unpermitted site
+            // (moved away), or a pending navigation from an unpermitted
+            // referrer -- the common case of clicking an X link from an
+            // external site -- is still loading and just hasn't committed
+            // yet (about:blank reads back as the literal string "about:blank",
+            // not undefined, so this branch never misfires on a genuine
+            // pending redirect of our own). Only the finished case counts as
+            // moved away; a still-loading one must fall through to the
+            // normal hang handling below.
+            //
+            // With a readable URL: finished loading a *different permitted
             // instance* than the one we are waiting on (a redirect chain or a
-            // manual navigation landed there). A genuine slow load still reads
-            // as status "loading" showing the pre-redirect page -- often
-            // about:blank, whose origin is not in PERMITTED_ORIGINS -- so this
-            // only catches real departures.
-            tabMovedAway = !tabUrl ||
-                (tab.status === "complete" && PERMITTED_ORIGINS.has(tabOrigin) && tabOrigin !== origin);
+            // manual navigation landed there) counts as moved away too.
+            tabMovedAway = !tabUrl
+                ? tab.status === "complete"
+                : (tab.status === "complete" && PERMITTED_ORIGINS.has(tabOrigin) && tabOrigin !== origin);
         } catch {
             // Tab gone.
             tabMovedAway = true;
@@ -735,31 +944,55 @@ function armWatchdog(tabId, origin) {
             return;
         }
 
-        recordLocal(origin, "BROKEN");
+        // No fleet-wide demotion here: a pure timeout only means "no response
+        // within NAV_TIMEOUT_MS", which a rate-limited-but-alive instance can
+        // trigger routinely under normal load. Demoting it for 30 minutes on
+        // that alone punishes every other tab and future navigation for a
+        // signal that isn't deterministic. The `tried` list already excludes
+        // it for *this* navigation, which is all a mere timeout justifies.
+        // Fleet-wide demotion is reserved for the deterministic signals below
+        // (a real HTTP failure or a definitive network error).
         switchInstance(tabId, origin, {
             skipCommittedCheck: true,
             reason: "did not respond in time"
         });
-    }, NAV_TIMEOUT_MS);
+    }, timeoutMs);
 }
 
-// Self-contained data: URL, so this needs no packaged file, no new
-// permission, and no web_accessible_resources entry -- shown only when every
-// configured instance has been tried and failed for one navigation.
+// Response headers arrived for the attempt currently being tracked: the
+// instance is alive, just slow. Re-arm the watchdog at the longer streaming
+// timeout instead of leaving the short one running, so an instance under
+// load isn't demoted for the same reason a genuinely dead one would be.
+browser.webRequest.onResponseStarted.addListener(
+    (details) => {
+        if (details.type !== "main_frame") {
+            return;
+        }
+
+        const origin = originOf(details.url);
+
+        if (!origin) {
+            return;
+        }
+
+        if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
+            armWatchdog(details.tabId, origin, NAV_STREAM_TIMEOUT_MS);
+        }
+    },
+    { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
+);
+
+// A packaged extension page, not a data: URL -- Firefox's tabs.update()
+// rejects data: URLs outright (confirmed against current MDN docs), which
+// silently defeated this entire terminal-failure path: the update() call
+// failed, its rejection was swallowed by the caller's .catch(() => {}), and
+// the user was left stranded on the last broken instance with no explanation
+// at all. Shown only when every configured instance has been tried and
+// failed for one navigation. No web_accessible_resources entry is needed:
+// tabs.update() navigating to the extension's own page is a first-party
+// operation, not a web page referencing an extension resource.
 function terminalFailurePage(path) {
-    const safePath = String(path).replace(/[&<>"']/g, (c) => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-    }[c]));
-
-    const html =
-        "<!doctype html><meta charset=\"utf-8\"><title>Twitter/X to Nitter</title>" +
-        "<body style=\"font-family:sans-serif;max-width:32em;margin:4em auto;line-height:1.5;color:#1a1a1a\">" +
-        "<h1>Every Nitter instance failed</h1>" +
-        "<p>Every configured instance was tried for this page and none of them worked right now.</p>" +
-        `<p><a href="https://x.com${safePath}">Try again</a></p>` +
-        "</body>";
-
-    return "data:text/html;charset=utf-8," + encodeURIComponent(html);
+    return browser.runtime.getURL(`terminal-failure.html?path=${encodeURIComponent(path)}`);
 }
 
 async function switchInstance(tabId, origin, { skipCommittedCheck = false, reason = "failed" } = {}) {
@@ -842,15 +1075,23 @@ async function switchInstance(tabId, origin, { skipCommittedCheck = false, reaso
         record.tried.push(origin);
     }
 
-    const next = pickInstance(record.tried);
+    // Bounded by elapsed wall-clock time, not just by instance count: a large
+    // fleet trying every candidate at NAV_STREAM_TIMEOUT_MS each could
+    // otherwise leave the user staring at a blank tab for minutes.
+    const outOfTime = (Date.now() - record.startedAt) >= MAX_FALLBACK_MS;
+    const next = outOfTime ? null : pickInstance(record.tried);
 
     if (!next) {
-        // Every configured instance has been tried for this navigation. Show
-        // a terminal failure page rather than leaving the user stranded on
-        // whatever broken page the last instance rendered, with no
-        // explanation of what happened or a way to retry.
+        // Either every configured instance has been tried for this
+        // navigation, or it has been running long enough that trying more
+        // would leave the user waiting too long either way. Show a terminal
+        // failure page rather than leaving the user stranded on whatever
+        // broken page the last instance rendered, with no explanation of
+        // what happened or a way to retry.
         console.log(
-            `[Twitter → Nitter] ${origin} ${reason}; every configured instance already tried for this navigation.`
+            outOfTime
+                ? `[Twitter → Nitter] ${origin} ${reason}; giving up after ${MAX_FALLBACK_MS / 1000}s on this navigation.`
+                : `[Twitter → Nitter] ${origin} ${reason}; every configured instance already tried for this navigation.`
         );
         browser.tabs.update(tabId, { url: terminalFailurePage(livePath) }).catch(() => {});
         activeRedirects.delete(tabId);
@@ -897,8 +1138,22 @@ browser.webRequest.onBeforeRequest.addListener(
 
         const record = activeRedirects.get(details.tabId);
 
+        let url;
+
+        try {
+            url = new URL(details.url);
+        } catch {
+            return;
+        }
+
         if (record) {
             record.requestId = details.requestId;
+            // Keep the tracked path in sync with wherever this navigation
+            // actually landed -- an in-Nitter link click or a self-redirect
+            // moves the tab to a new path, and a hang/failure from here on
+            // must fall back to *this* path, not the one that first created
+            // the record.
+            record.path = url.pathname + url.search;
 
             if (!record.tried.includes(origin)) {
                 record.tried.push(origin);
@@ -908,20 +1163,13 @@ browser.webRequest.onBeforeRequest.addListener(
             return;
         }
 
-        let url;
-
-        try {
-            url = new URL(details.url);
-        } catch {
-            return;
-        }
-
         activeRedirects.set(details.tabId, {
             path: url.pathname + url.search,
             tried: [origin],
             timer: null,
             switching: false,
-            requestId: details.requestId
+            requestId: details.requestId,
+            startedAt: Date.now()
         });
         armWatchdog(details.tabId, origin);
     },
@@ -945,13 +1193,38 @@ browser.webRequest.onBeforeRequest.addListener(
 //
 // Only ever called for the tab's currently tracked attempt, never for
 // ordinary Nitter browsing outside one.
+// Only an HTML response can be a Nitter page. Firefox wraps a directly-opened
+// image (or other browsable non-HTML content a fork might serve) in a
+// synthetic HTML document with none of Nitter's markers, which check-page.js's
+// own HTML-vs-XML guard cannot distinguish from a real broken page -- without
+// this gate, opening a proxied image in a new tab demotes the instance and
+// cascades the same false failure through the rest of the fleet. Default to
+// checking when the header is missing, so a server that omits content-type
+// doesn't silently skip real failure detection.
+function isHTMLResponse(headers) {
+    if (!Array.isArray(headers)) {
+        return true;
+    }
+
+    const header = headers.find(h => h && typeof h.name === "string" && h.name.toLowerCase() === "content-type");
+
+    if (!header || typeof header.value !== "string") {
+        return true;
+    }
+
+    return header.value.toLowerCase().startsWith("text/html");
+}
+
+// Returns check-page.js's raw verdict: false, "fail", or "unknown" -- see
+// that file for what each means. Collapsed to false on any injection error
+// (e.g. a page that blocked the script outright).
 async function pageShowsFailure(tabId) {
     try {
         const results = await browser.tabs.executeScript(tabId, {
             file: "check-page.js"
         });
 
-        return Boolean(results && results[0]);
+        return (results && results[0]) || false;
     } catch {
         return false;
     }
@@ -998,19 +1271,36 @@ browser.webRequest.onCompleted.addListener(
             return;
         }
 
-        if (isCurrent && await pageShowsFailure(details.tabId)) {
-            // executeScript above is async: the tab may have navigated during
-            // it, in which case check-page.js ran against a different document
-            // and its verdict is not about this instance. Re-confirm before
-            // acting on it.
-            if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
-                recordLocal(origin, "BROKEN");
-                switchInstance(details.tabId, origin, {
-                    reason: "rendered a soft failure page"
-                });
-            }
+        if (isCurrent && isHTMLResponse(details.responseHeaders)) {
+            const failure = await pageShowsFailure(details.tabId);
 
-            return;
+            if (failure) {
+                // executeScript above is async: the tab may have navigated
+                // during it, in which case check-page.js ran against a
+                // different document and its verdict is not about this
+                // instance. Re-confirm before acting on it.
+                if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
+                    if (failure === "unknown") {
+                        // Doesn't look like Nitter at all, but not confidently
+                        // -- could be a genuine operator shutdown page, or
+                        // could be check-page.js's own template markers going
+                        // stale. Fall back for this navigation either way,
+                        // but never demote the instance fleet-wide on this
+                        // signal alone; see noteTemplateMismatch.
+                        noteTemplateMismatch(origin);
+                    } else {
+                        recordLocal(origin, "BROKEN");
+                    }
+
+                    switchInstance(details.tabId, origin, {
+                        reason: failure === "unknown"
+                            ? "did not render as a Nitter page"
+                            : "rendered a soft failure page"
+                    });
+                }
+
+                return;
+            }
         }
 
         recordLocal(origin, "OK");
@@ -1019,7 +1309,8 @@ browser.webRequest.onCompleted.addListener(
             activeRedirects.delete(details.tabId);
         }
     },
-    { urls: NITTER_URL_PATTERNS, types: ["main_frame"] }
+    { urls: NITTER_URL_PATTERNS, types: ["main_frame"] },
+    ["responseHeaders"]
 );
 
 browser.webRequest.onErrorOccurred.addListener(
