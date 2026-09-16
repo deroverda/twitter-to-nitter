@@ -26,7 +26,7 @@ The request to X is **intercepted before it leaves your browser**. You never wat
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
-    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check whether it is rate limited, blocked, unreachable, or an error page, then retry or stay">
+    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check whether it is rate limited, blocked, unreachable, or not a real Nitter page, then retry, stay, or show a failure page once retries run out">
   </picture>
 </p>
 
@@ -67,7 +67,6 @@ The extension redirects to any instance the [health service](https://status.d420
 - nitter.netbub.com
 - nitter.miningtcup.me
 - shitter.thepixora.com
-- xcancel.com
 
 **Permitted superset** (host permissions in `manifest.json`) - the seed list plus `nitter.xitter.cc`. The health service can activate or deprioritise any of these live between releases. It cannot introduce a domain outside this set: the extension discards any host from the health data that the manifest does not already list, and re-checks at the point of use. (Firefox itself does not restrict redirect targets - that check is done in the extension's own code.) Seed instances are never fully dropped, only pushed down the ranking when the service marks them unhealthy.
 
@@ -129,6 +128,6 @@ One limitation is outside this extension's control: some Nitter instances do not
 
 ## No runtime dependencies
 
-What ships is just `manifest.json`, `background.js`, `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection), and `terminal-failure.html`/`terminal-failure.js` (the page shown when every configured instance has failed - a packaged extension page rather than a `data:` URL, since Firefox's `tabs.update()` rejects `data:` URLs outright). No build step, no framework, nothing bundled.
+What ships is just `manifest.json`, `background.js`, `check-page.js` (a small file-based content script, injected only into actively-tracked navigations to check for instance failure - see Privacy above; it's a separate file rather than inline code because some pages' own CSP blocks inline script injection), `terminal-failure.html`/`terminal-failure.js` (the page shown when every configured instance has failed - a packaged extension page rather than a `data:` URL, since Firefox's `tabs.update()` rejects `data:` URLs outright), and `popup.html`/`popup.js` (the toolbar popup for setting a preferred instance - see [What it does](#what-it-does)). No build step, no framework, nothing bundled.
 
 The repo also has a `test/` harness that runs on `node --test` (`npm test`), with one dev-only dependency (`linkedom`) for parsing HTML fixtures. It is not part of the extension and is excluded from the packaged `.xpi`.
