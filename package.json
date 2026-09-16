@@ -4,7 +4,7 @@
   "private": true,
   "description": "Test harness for the Twitter/X to Nitter extension. Not shipped in the .xpi.",
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test"
   },
   "devDependencies": {
     "linkedom": "^0.18.0"
