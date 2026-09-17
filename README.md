@@ -17,7 +17,7 @@ The X request is **intercepted before it leaves your browser**. X never receives
 > [!NOTE]
 > **August 2026 cease-and-desist, September recovery.** On 24 August 2026, X Corp. sent cease-and-desist letters demanding the takedown of Nitter instances and the upstream [Nitter project](https://github.com/zedeus/nitter), causing most public instances to shut down. In early September, after legal advice, the project announced it would continue ("Nitter lives") and instances began returning. The upstream repository was archived on 11 September 2026; individual Nitter-compatible instances remain separately operated. This extension now follows the [live instance health service](https://status.d420.de/), activating and dropping permitted instances as their status changes. The fleet remains smaller and less stable than before; if all reachable instances fail, the extension shows a failure page rather than sending you to X.
 
-> **Firefox Add-ons (AMO):** No public listing is planned for now. Releases are private, unlisted signed builds (see [Install](#install)).
+> **Firefox Add-ons (AMO):** A public listing was submitted on 17 September 2026 and is pending Mozilla's review; it isn't live yet. Until it publishes, install the signed `.xpi` from the [latest release](https://github.com/deroverda/twitter-to-nitter/releases/latest) (see [Install](#install)).
 
 ## What it does
 
