@@ -199,6 +199,7 @@ test("isRedirectablePath passes profiles and status permalinks, blocks X-only su
     assert.equal(bg.isRedirectablePath("/i/lists/123"), true);
     assert.equal(bg.isRedirectablePath("/i/lists/123/members"), true);
     assert.equal(bg.isRedirectablePath("/home"), false);
+    assert.equal(bg.isRedirectablePath("/tos"), false);
     assert.equal(bg.isRedirectablePath("/settings/profile"), false);
     assert.equal(bg.isRedirectablePath("/i/bookmarks"), false);
     assert.equal(bg.isRedirectablePath("/i/spaces/abc"), false);
@@ -284,6 +285,22 @@ test("sameAttempt requires an exact request id match, no undefined wildcard", ()
     assert.equal(bg.sameAttempt({ currentOrigin: "https://a" }, "https://a", "6"), false);
     assert.equal(bg.sameAttempt({ currentOrigin: "https://a", requestId: "5" }, "https://b", "5"), false);
     assert.equal(bg.sameAttempt(null, "https://a", "5"), false);
+});
+
+test("X's own locale-prefixed policy pages stay on X", () => {
+    // x.com/tos answers 302 -> x.com/en/tos, which arrives as its own
+    // navigation; without locale handling it was redirected to Nitter and
+    // rendered "Page not found".
+    assert.equal(bg.isRedirectablePath("/en/tos"), false);
+    assert.equal(bg.isRedirectablePath("/en/privacy"), false);
+    assert.equal(bg.isRedirectablePath("/pt-br/tos"), false, "X uses region-qualified locales too");
+    assert.equal(bg.isRedirectablePath("/en/settings"), false);
+
+    // A locale segment is indistinguishable from a short username, so it must
+    // never block on its own -- only when what follows is an X-only surface.
+    assert.equal(bg.isRedirectablePath("/en"), true, "/en alone is a profile, not a locale prefix");
+    assert.equal(bg.isRedirectablePath("/en/status/20"), true);
+    assert.equal(bg.isRedirectablePath("/en/with_replies"), true);
 });
 
 test("PERMITTED_ORIGINS is exactly the manifest's eight instance origins", () => {

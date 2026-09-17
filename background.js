@@ -135,6 +135,16 @@ const UNSUPPORTED_PREFIXES = [
     "/privacy"
 ];
 
+// X answers /tos with a 302 to /en/tos (confirmed live), and does the same for
+// its other policy pages. That lands as a fresh navigation whose path the list
+// above no longer matches, so the page was being redirected to Nitter -- which
+// has no such route and just renders "Page not found".
+//
+// A leading locale segment is only ever honoured when what follows is itself
+// an X-only surface: a two-letter segment is equally a short username, so
+// "/en" alone is somebody's profile and must still redirect normally.
+const LOCALE_PREFIX = /^\/[a-z]{2}(?:-[a-z]{2})?(?=\/)/i;
+
 // Canonical status and list permalinks under /i/ that Nitter does serve.
 // Nitter itself redirects /i/web/status/<id> to /i/status/<id>, so both are
 // passed through. /i/lists/<id> and its /members page are real upstream
@@ -863,14 +873,24 @@ browser.runtime.onMessage.addListener(async (message) => {
 // Path and host handling
 // ============================================================
 
+function isXOnlySurface(pathname) {
+    return UNSUPPORTED_PREFIXES.some(
+        prefix => pathname === prefix || pathname.startsWith(prefix + "/")
+    );
+}
+
 function isRedirectablePath(pathname) {
     if (pathname.startsWith("/i/")) {
         return SUPPORTED_I_PATH.test(pathname);
     }
 
-    return !UNSUPPORTED_PREFIXES.some(
-        prefix => pathname === prefix || pathname.startsWith(prefix + "/")
-    );
+    if (isXOnlySurface(pathname)) {
+        return false;
+    }
+
+    const withoutLocale = pathname.replace(LOCALE_PREFIX, "");
+
+    return withoutLocale === pathname || !isXOnlySurface(withoutLocale);
 }
 
 
