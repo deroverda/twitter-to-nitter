@@ -372,27 +372,38 @@ function pickInstance(exclude) {
     return null;
 }
 
-// Biases the spread toward the instances the health service rates highest
-// without collapsing onto the single best one -- concentrating every user on
-// one instance causes exactly the per-instance rate limiting the spread
-// exists to avoid. The service's points sit in a narrow band (33-55 across
-// the fleet when this was written), so an absolute weighting would barely
-// bias anything; normalising across the tier keeps the bias meaningful
-// whatever range the service reports. The best-rated candidate ends up at
-// most SPREAD_MAX_BIAS times likelier than the weakest, never certain.
+// Biases the spread toward better instances without collapsing onto the
+// single best one -- concentrating every user on one instance causes exactly
+// the per-instance rate limiting the spread exists to avoid. The best
+// candidate ends up at most SPREAD_MAX_BIAS times likelier than the weakest,
+// never certain.
+//
+// Response time counts as much as the health score here, deliberately. The
+// two are not symmetric problems: an instance that fails is caught by the
+// fallback path and demoted within seconds, so unreliability largely
+// self-corrects, while an instance that merely answers slowly is never
+// demoted for it and quietly taxes every page load instead. Weighting on the
+// health score alone would favour the signal that is already handled and
+// ignore the one that isn't -- and the two genuinely disagree: when this was
+// written the best-scoring instance answered roughly 5x slower than the
+// fastest one.
 const SPREAD_MAX_BIAS = 4;
 
-function weightedPick(origins) {
-    const points = origins.map(origin => {
-        const info = statusFor(origin);
-
-        return info && typeof info.points === "number" ? info.points : null;
-    });
-
+// Scales each instance's value to 0..1 across the tier, 1 being best;
+// lowerIsBetter inverts that for latency. Normalised across the tier rather
+// than against an absolute scale because the two signals share no units and
+// neither has a fixed range -- points sat in a narrow 33-55 band across the
+// fleet while ping spanned 276-2311ms, so any fixed scale would discriminate
+// far too much on one and far too little on the other.
+//
+// Returns null when the values can't separate the candidates (none reported,
+// or all identical) so the caller drops the signal instead of manufacturing
+// a bias out of noise.
+function normaliseSignal(values, lowerIsBetter) {
     let low = null;
     let high = null;
 
-    for (const value of points) {
+    for (const value of values) {
         if (value === null) {
             continue;
         }
@@ -406,18 +417,42 @@ function weightedPick(origins) {
         }
     }
 
-    // Nothing rates the candidates apart -- no status data at all, or every
-    // one scored identically. Spread uniformly rather than invent a bias.
     if (low === null || high <= low) {
+        return null;
+    }
+
+    return values.map(value => {
+        // Unreported sits at the bottom of the band rather than being
+        // dropped: the instance is still fully healthy as far as anything
+        // here knows, it just has nothing to promote it.
+        if (value === null) {
+            return 0;
+        }
+
+        const scaled = (value - low) / (high - low);
+
+        return lowerIsBetter ? 1 - scaled : scaled;
+    });
+}
+
+function weightedPick(origins) {
+    const reported = origins.map(origin => statusFor(origin));
+    const valueOf = (info, field) => (info && typeof info[field] === "number" ? info[field] : null);
+
+    const signals = [
+        normaliseSignal(reported.map(info => valueOf(info, "points")), false),
+        normaliseSignal(reported.map(info => valueOf(info, "ping")), true)
+    ].filter(signal => signal !== null);
+
+    if (signals.length === 0) {
         return origins[Math.floor(Math.random() * origins.length)];
     }
 
-    // An instance the service doesn't rate sits at the bottom of the band
-    // rather than being dropped: it is still fully healthy as far as anything
-    // here knows, it just has no score to promote it.
-    const weights = points.map(value =>
-        1 + (SPREAD_MAX_BIAS - 1) * ((value === null ? low : value) - low) / (high - low)
-    );
+    const weights = origins.map((origin, index) => {
+        const score = signals.reduce((sum, signal) => sum + signal[index], 0) / signals.length;
+
+        return 1 + (SPREAD_MAX_BIAS - 1) * score;
+    });
 
     let roll = Math.random() * weights.reduce((sum, weight) => sum + weight, 0);
 

@@ -470,16 +470,62 @@ test("the spread is weighted toward higher-rated instances but never certain", (
     assert.ok(counts[weak] > 0, "a weaker but fully healthy instance must still get picked sometimes");
 });
 
-test("an unrated instance stays in the spread instead of being starved out", () => {
-    const bg2 = load(undefined, undefined, () => 0.999);
+test("response time sways the spread, not just the health score", () => {
+    // Equal points, so only latency can separate these two: were ping ignored
+    // in the weighting they would carry identical weight and the counts would
+    // come out even.
+    const fast = "https://nitter.click";
+    const slow = "https://nitter.netbub.com";
+    const hosts = {
+        "nitter.click": { healthy: true, points: 50, ping: 276 },
+        "nitter.netbub.com": { healthy: true, points: 50, ping: 2311 }
+    };
 
-    // Only one instance is rated; the rest have no status entry at all.
-    bg2.setStatus({ "nitter.click": { healthy: true, points: 55, ping: 100 } }, Date.now());
+    let i = 0;
+    const sequence = Array.from({ length: 100 }, (_, n) => n / 100);
+    const bg2 = load(undefined, undefined, () => sequence[i++ % sequence.length]);
+    bg2.setStatus(hosts, Date.now());
     bg2.recomputeRanking();
 
-    const pick = bg2.pickInitialInstance();
-    assert.ok(pick, "a pick is always returned");
-    assert.notEqual(pick, "https://nitter.click", "the top roll must still be able to land on an unrated instance");
+    const counts = {};
+
+    for (let n = 0; n < 100; n++) {
+        const pick = bg2.pickInitialInstance();
+        counts[pick] = (counts[pick] || 0) + 1;
+    }
+
+    assert.ok(
+        counts[fast] > counts[slow],
+        "a quick instance must be favoured over an equally healthy slow one -- nothing else in the extension ever demotes an instance for being slow"
+    );
+    assert.ok(counts[slow] > 0, "the slower instance must still get picked sometimes");
+});
+
+test("an unrated instance stays in the spread instead of being starved out", () => {
+    const unrated = "https://shitter.thepixora.com";
+
+    // Two rated instances, so the signal can discriminate; a third with no
+    // status entry at all must still be reachable.
+    const hosts = {
+        "nitter.click": { healthy: true, points: 55, ping: 276 },
+        "nitter.netbub.com": { healthy: true, points: 40, ping: 900 }
+    };
+
+    let i = 0;
+    const sequence = Array.from({ length: 100 }, (_, n) => n / 100);
+    const bg2 = load(undefined, undefined, () => sequence[i++ % sequence.length]);
+    bg2.setStatus(hosts, Date.now());
+    bg2.recomputeRanking();
+
+    let unratedPicks = 0;
+
+    for (let n = 0; n < 100; n++) {
+        if (bg2.pickInitialInstance() === unrated) {
+            unratedPicks++;
+        }
+    }
+
+    assert.ok(unratedPicks > 0, "an instance the service doesn't rate is still fully healthy and must keep a share of the spread");
 });
 
 test("pickInitialInstance falls back to the strict top pick once every candidate is locally broken", () => {
