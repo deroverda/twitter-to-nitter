@@ -38,8 +38,14 @@ const STATUS_API = "https://status.d420.de/api/v1/instances";
 // github.com/zedeus/nitter/issues/1209 it doesn't proxy images/video/GIFs
 // (they connect directly to Twitter's CDN) and loads Microsoft Clarity
 // analytics -- a privacy leak this extension exists to avoid.
+//
+// nitter.kareem.one was dropped from the floor on 2026-09-17 after answering
+// 502 on three separate days and disappearing from the status service's
+// tracked set entirely. Its host permission is deliberately kept: seeding a
+// dead instance costs a real fallback hop on a cold start, but leaving it
+// permitted means it returns on its own, with no release, if it recovers and
+// the service starts reporting it healthy again.
 const SEED_INSTANCES = [
-    "https://nitter.kareem.one",
     "https://nitter.jaydenha.uk",
     "https://nitter.click",
     "https://nitter.meowing.monster",
@@ -195,6 +201,18 @@ const FAILURE_MAX_STRIKES = 4;
 const TEMPLATE_MISMATCH_WINDOW_MS = 2 * 60 * 1000;
 const TEMPLATE_MISMATCH_TRIP_THRESHOLD = 4;
 const TEMPLATE_MISMATCH_COOLDOWN_MS = 30 * 60 * 1000;
+
+// One instance failing the template check over and over is that instance's
+// own problem -- a shutdown notice or a placeholder page -- not the detector
+// going stale, and leaving it undemoted meant it kept being picked and kept
+// costing a fallback hop (observed live: the same instance mismatched three
+// times in one session while the service still rated it healthy). The
+// fleet-wide tripwire above is what separates the two cases, so a repeat
+// offender is only blamed while that hasn't tripped. The longer window is
+// deliberate: a instance that fails once every few minutes is still a repeat
+// offender, but the burst that signals a template change is not.
+const TEMPLATE_MISMATCH_INSTANCE_WINDOW_MS = 15 * 60 * 1000;
+const TEMPLATE_MISMATCH_INSTANCE_STRIKES = 2;
 
 // If a redirected navigation neither completes nor errors within this window,
 // treat the instance as hanging and move on. Firefox's own network timeout is
@@ -710,15 +728,23 @@ function templateMismatchTripped() {
     return Date.now() < templateMismatchTrippedUntil;
 }
 
+// Returns true when this origin has mismatched often enough on its own to be
+// treated as genuinely broken rather than as a symptom of a template change.
 function noteTemplateMismatch(origin) {
     const now = Date.now();
 
     templateMismatchEvents = templateMismatchEvents.filter(
-        event => (now - event.at) < TEMPLATE_MISMATCH_WINDOW_MS
+        event => (now - event.at) < TEMPLATE_MISMATCH_INSTANCE_WINDOW_MS
     );
     templateMismatchEvents.push({ origin, at: now });
 
-    const distinctOrigins = new Set(templateMismatchEvents.map(event => event.origin));
+    // Only the recent burst counts toward "the whole fleet stopped matching",
+    // even though events are retained longer for the per-instance tally.
+    const distinctOrigins = new Set(
+        templateMismatchEvents
+            .filter(event => (now - event.at) < TEMPLATE_MISMATCH_WINDOW_MS)
+            .map(event => event.origin)
+    );
 
     if (distinctOrigins.size >= TEMPLATE_MISMATCH_TRIP_THRESHOLD && !templateMismatchTripped()) {
         templateMismatchTrippedUntil = now + TEMPLATE_MISMATCH_COOLDOWN_MS;
@@ -728,6 +754,25 @@ function noteTemplateMismatch(origin) {
             "tripping the detector, not a real fleet-wide outage."
         );
     }
+
+    // While the tripwire is up every mismatch is suspect as a detector fault,
+    // so no instance is blamed for one until it clears.
+    if (templateMismatchTripped()) {
+        return false;
+    }
+
+    // The moment a second instance is mismatching too, this stops being
+    // evidence about any one of them -- waiting for the 4-instance tripwire
+    // before easing off would let the first few take a demotion they may not
+    // deserve, purely because of the order the instances happened to be tried
+    // in. An instance is only blamed while it is the sole one missing.
+    const affected = new Set(templateMismatchEvents.map(event => event.origin));
+
+    if (affected.size > 1) {
+        return false;
+    }
+
+    return templateMismatchEvents.length >= TEMPLATE_MISMATCH_INSTANCE_STRIKES;
 }
 
 // A 404 is Nitter answering that a user or tweet does not exist; that is a
@@ -1531,10 +1576,13 @@ browser.webRequest.onCompleted.addListener(
                         // Doesn't look like Nitter at all, but not confidently
                         // -- could be a genuine operator shutdown page, or
                         // could be check-page.js's own template markers going
-                        // stale. Fall back for this navigation either way,
-                        // but never demote the instance fleet-wide on this
-                        // signal alone; see noteTemplateMismatch.
-                        noteTemplateMismatch(origin);
+                        // stale. Fall back for this navigation either way. A
+                        // single mismatch never demotes; only an instance that
+                        // keeps mismatching on its own does, which is what
+                        // separates a broken instance from a template change.
+                        if (noteTemplateMismatch(origin)) {
+                            recordLocal(origin, "BROKEN", "server");
+                        }
                     } else {
                         // check-page.js only returns "fail" on a named
                         // rate-limit/auth-exhaustion phrase, which is an

@@ -691,6 +691,74 @@ test("solving a challenge clears the demotion it caused", async () => {
     assert.equal(bg2.locallyBroken(origin, 0), false, "a working page load clears the demotion straight away");
 });
 
+test("one instance that keeps failing the template check is demoted; a single miss is not", async () => {
+    const origin = "https://nitter.click";
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => ["unknown"]
+    });
+    const html = [{ name: "Content-Type", value: "text/html" }];
+    const visit = async (requestId) => {
+        // The page rendered, so switchInstance reads the tab's committed URL;
+        // without one it abandons the attempt before the verdict is applied.
+        bg2.setTab(origin + "/jack", "complete");
+        bg2.followListener({ type: "main_frame", tabId: 1, requestId, url: origin + "/jack" });
+        await bg2.onCompleted({ type: "main_frame", tabId: 1, requestId, url: origin + "/jack", statusCode: 200, responseHeaders: html });
+    };
+
+    await visit("r1");
+    assert.equal(
+        bg2.locallyBroken(origin, 0),
+        false,
+        "one mismatch could be our own template markers going stale, so it must not demote"
+    );
+
+    await visit("r2");
+    assert.equal(
+        bg2.locallyBroken(origin, 0),
+        true,
+        "the same instance missing twice is that instance's problem, not the detector's"
+    );
+});
+
+test("a fleet-wide template change never cascades into demoting the fleet", async () => {
+    const html = [{ name: "Content-Type", value: "text/html" }];
+
+    async function mismatchAll(visitsEach) {
+        const bg2 = load(undefined, undefined, undefined, {
+            now: 0,
+            executeScript: async () => ["unknown"]
+        });
+        const fleet = bg2.SEED_INSTANCES.slice(0, 5);
+        let request = 0;
+
+        for (const origin of fleet) {
+            for (let visit = 0; visit < visitsEach; visit++) {
+                request++;
+                bg2.setTab(origin + "/jack", "complete");
+                bg2.followListener({ type: "main_frame", tabId: 1, requestId: "r" + request, url: origin + "/jack" });
+                await bg2.onCompleted({ type: "main_frame", tabId: 1, requestId: "r" + request, url: origin + "/jack", statusCode: 200, responseHeaders: html });
+            }
+        }
+
+        // Spread into a host-realm array: SEED_INSTANCES comes from the vm
+        // context, and deepStrictEqual compares prototypes, so a vm-realm
+        // array never matches a literal here even when the contents agree.
+        return [...fleet.filter(origin => bg2.locallyBroken(origin, 0))];
+    }
+
+    // One hop each is what a fallback chain looks like during a markup change,
+    // and it is the case that matters: nothing is ever blamed.
+    assert.deepEqual(await mismatchAll(1), [], "a fallback chain across the fleet must demote nobody");
+
+    // Reloading one instance before moving on does let that first instance be
+    // blamed, because at that moment it genuinely is the only thing failing --
+    // indistinguishable from a single broken instance. What must not happen is
+    // the blame spreading once the pattern becomes visible.
+    const repeated = await mismatchAll(2);
+    assert.ok(repeated.length <= 1, `at most the first instance may be blamed, got ${repeated.length}`);
+});
+
 test("an entry cached by an older version is still honoured and still expires", () => {
     const bg2 = load(undefined, undefined, undefined, { now: 0 });
     const origin = "https://nitter.kareem.one";

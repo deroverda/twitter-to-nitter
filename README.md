@@ -49,7 +49,7 @@ The extension also:
 * Redirects canonical status URLs including `/i/status/<id>` and `/i/web/status/<id>`.
 * Leaves X-only surfaces such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, `/privacy`, and the rest of `/i/*` on X.
 * Treats a 404 as a valid Nitter response.
-* Remembers instances that failed for you and temporarily demotes them.
+* Remembers instances that failed for you and temporarily demotes them, for longer the worse the failure was and the more often it repeats. A rate limit clears in minutes; a host that stops resolving is held down far longer.
 * Temporarily stops redirecting a tab if it detects a redirect loop.
 * Detects failures regardless of how you reached Nitter: the extension's redirect, search result, bookmark, typed URL, or link clicked while already browsing Nitter.
 * Detects HTTP 200 pages that are actually instance failures, including custom operator shutdown pages, rate-limit pages, exhausted auth tokens, and known Nitter instance-error panels. A normal "not found" page is not treated as a failure.
@@ -62,7 +62,6 @@ The extension can use any instance currently reported healthy by the [health ser
 
 **Seed list** (`SEED_INSTANCES` in `background.js`):
 
-* `nitter.kareem.one`
 * `nitter.jaydenha.uk`
 * `nitter.click`
 * `nitter.meowing.monster`
@@ -73,7 +72,7 @@ The extension can use any instance currently reported healthy by the [health ser
 
 **Permitted superset** (`manifest.json`):
 
-Same as the seed list.
+The seed list plus `nitter.kareem.one`, which was dropped from the seed list in September 2026 after repeated 502s but stays permitted so it can return without a release if it recovers.
 
 The health service can activate or deprioritise these domains between releases, but cannot introduce new domains. Hosts outside the manifest are discarded and re-checked at use time. Seed instances are never completely removed; unhealthy ones are simply pushed down the ranking.
 
