@@ -5,14 +5,16 @@
 // which sends "default-src 'none'". A file-based content script isn't
 // subject to the page's CSP the same way an inline one is.
 //
-// Returns one of three values: false when the page is fine (a real page, a
-// "not found" result, or a challenge page still resolving); "fail" for a
-// confidently-identified instance failure (a named rate-limit/auth phrase, in
-// content or Nitter's own error panel); "unknown" when the page merely
-// doesn't look like Nitter's template at all. "unknown" still triggers
-// fallback for this navigation (the page isn't usable either way), but the
-// caller never treats it as a confirmed fleet-wide failure -- a real Nitter
-// template change would otherwise get every instance judged broken at once.
+// Returns one of four values: false when the page is fine (a real page or a
+// "not found" result); "challenge" for an anti-bot interstitial that hasn't
+// resolved yet; "fail" for a confidently-identified instance failure (a named
+// rate-limit/auth phrase, in content or Nitter's own error panel); "unknown"
+// when the page merely doesn't look like Nitter's template at all. "unknown"
+// still triggers fallback for this navigation (the page isn't usable either
+// way), but the caller never treats it as a confirmed fleet-wide failure -- a
+// real Nitter template change would otherwise get every instance judged
+// broken at once. "challenge" never triggers fallback: the tab is left alone
+// so the user can complete it.
 (() => {
     // "rate limit" (no "-ed") also matches "rate limit exceeded" and "rate
     // limiting", wordings "rate limited" alone missed. The gates below
@@ -23,7 +25,10 @@
 
     // 1. Anti-bot interstitial still resolving. This is transient -- it turns
     //    into a real Nitter page once the challenge passes -- so it is not a
-    //    failure. Cloudflare's challenge runtime always loads from
+    //    failure, and the caller must not redirect away from it mid-solve.
+    //    Reported distinctly from a working page so the caller can still keep
+    //    the instance out of the next fresh redirect. Cloudflare's challenge
+    //    runtime always loads from
     //    /cdn-cgi/challenge-platform and its interactive form is
     //    #challenge-form; the localized "just a moment" title is only a cheap
     //    secondary signal, not the primary gate (it is English-only and
@@ -33,7 +38,7 @@
         document.querySelector("#challenge-form") ||
         (document.title || "").toLowerCase().includes("just a moment")
     ) {
-        return false;
+        return "challenge";
     }
 
     // 2. Only an HTML document can be a Nitter page. RSS, JSON and plain-text

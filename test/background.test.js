@@ -423,6 +423,65 @@ test("pickInitialInstance spreads picks across the fully-healthy tier instead of
     assert.equal(bg2.pickInitialInstance(), topTier[topTier.length - 1]);
 });
 
+test("the spread is weighted toward higher-rated instances but never certain", () => {
+    const top = "https://nitter.click";
+    const weak = "https://nitter.netbub.com";
+    const hosts = {};
+
+    for (const seed of load().SEED_INSTANCES) {
+        hosts[new URL(seed).hostname] = { healthy: true, points: 33, ping: 900 };
+    }
+
+    hosts["nitter.click"] = { healthy: true, points: 55, ping: 900 };
+
+    // A roll at the very bottom of the weighted range lands on whichever
+    // instance sorts first; one at the very top must still reach a weaker
+    // instance, or the spread has collapsed onto the single best candidate.
+    const atFloor = load(undefined, undefined, () => 0);
+    atFloor.setStatus(hosts, Date.now());
+    atFloor.recomputeRanking();
+    assert.equal(atFloor.pickInitialInstance(), top, "the highest-rated instance sorts first and wins the lowest roll");
+
+    const atCeiling = load(undefined, undefined, () => 0.999);
+    atCeiling.setStatus(hosts, Date.now());
+    atCeiling.recomputeRanking();
+    assert.notEqual(
+        atCeiling.pickInitialInstance(),
+        top,
+        "weighting must not collapse to always picking the best instance -- concentrating every user on one is what rate-limits it"
+    );
+
+    // Counted over many rolls the better instance should win more often than
+    // an equal share, without starving the rest.
+    let i = 0;
+    const sequence = Array.from({ length: 100 }, (_, n) => n / 100);
+    const spread = load(undefined, undefined, () => sequence[i++ % sequence.length]);
+    spread.setStatus(hosts, Date.now());
+    spread.recomputeRanking();
+
+    const counts = {};
+
+    for (let n = 0; n < 100; n++) {
+        const pick = spread.pickInitialInstance();
+        counts[pick] = (counts[pick] || 0) + 1;
+    }
+
+    assert.ok(counts[top] > counts[weak], "the higher-rated instance must be picked more often than a weaker one");
+    assert.ok(counts[weak] > 0, "a weaker but fully healthy instance must still get picked sometimes");
+});
+
+test("an unrated instance stays in the spread instead of being starved out", () => {
+    const bg2 = load(undefined, undefined, () => 0.999);
+
+    // Only one instance is rated; the rest have no status entry at all.
+    bg2.setStatus({ "nitter.click": { healthy: true, points: 55, ping: 100 } }, Date.now());
+    bg2.recomputeRanking();
+
+    const pick = bg2.pickInitialInstance();
+    assert.ok(pick, "a pick is always returned");
+    assert.notEqual(pick, "https://nitter.click", "the top roll must still be able to land on an unrated instance");
+});
+
 test("pickInitialInstance falls back to the strict top pick once every candidate is locally broken", () => {
     const bg2 = load();
 
@@ -505,6 +564,68 @@ test("repeat failures escalate the demotion, and a success clears the accumulate
     bg2.recordLocal(origin, "OK");
     bg2.recordLocal(origin, "BROKEN", "busy");
     assert.equal(bg2.getLocalHealth()[origin].strikes, 1, "a working load resets the instance's record");
+});
+
+test("a Cloudflare challenge leaves the tab alone but keeps the instance out of the next redirect", async () => {
+    const origin = "https://nitter.click";
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => ["challenge"]
+    });
+
+    bg2.followListener({ type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack" });
+    await bg2.onCompleted({
+        type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack",
+        statusCode: 403,
+        responseHeaders: [
+            { name: "Content-Type", value: "text/html" },
+            { name: "cf-mitigated", value: "challenge" }
+        ]
+    });
+
+    assert.deepEqual(
+        bg2.getTabUpdateCalls(),
+        [],
+        "the user may be mid-CAPTCHA -- nothing may navigate the tab away from a challenge"
+    );
+    assert.equal(bg2.getActiveRedirects().has(1), false, "the attempt ends rather than staying tracked");
+    // Long past every watchdog window: nothing may fire later and navigate a
+    // tab whose user is still working through the challenge.
+    await bg2.advance(120000);
+    assert.deepEqual(bg2.getTabUpdateCalls(), [], "no watchdog is left armed to yank the tab later");
+    assert.equal(
+        bg2.locallyBroken(origin, 0),
+        true,
+        "the instance is demoted so the next fresh redirect prefers one that isn't challenging this user"
+    );
+    assert.equal(bg2.locallyBroken(origin, 6 * 60 * 1000), false, "and only briefly -- it is a busy-grade demotion");
+});
+
+test("solving a challenge clears the demotion it caused", async () => {
+    const origin = "https://nitter.click";
+    let verdict = "challenge";
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => [verdict]
+    });
+    const cfHeaders = [
+        { name: "Content-Type", value: "text/html" },
+        { name: "cf-mitigated", value: "challenge" }
+    ];
+
+    bg2.followListener({ type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack" });
+    await bg2.onCompleted({ type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack", statusCode: 403, responseHeaders: cfHeaders });
+    assert.equal(bg2.locallyBroken(origin, 0), true);
+
+    // The user solves it: the real page loads on the same instance.
+    verdict = false;
+    bg2.followListener({ type: "main_frame", tabId: 1, requestId: "r2", url: origin + "/jack" });
+    await bg2.onCompleted({
+        type: "main_frame", tabId: 1, requestId: "r2", url: origin + "/jack",
+        statusCode: 200, responseHeaders: [{ name: "Content-Type", value: "text/html" }]
+    });
+
+    assert.equal(bg2.locallyBroken(origin, 0), false, "a working page load clears the demotion straight away");
 });
 
 test("an entry cached by an older version is still honoured and still expires", () => {

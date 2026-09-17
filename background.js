@@ -372,16 +372,76 @@ function pickInstance(exclude) {
     return null;
 }
 
+// Biases the spread toward the instances the health service rates highest
+// without collapsing onto the single best one -- concentrating every user on
+// one instance causes exactly the per-instance rate limiting the spread
+// exists to avoid. The service's points sit in a narrow band (33-55 across
+// the fleet when this was written), so an absolute weighting would barely
+// bias anything; normalising across the tier keeps the bias meaningful
+// whatever range the service reports. The best-rated candidate ends up at
+// most SPREAD_MAX_BIAS times likelier than the weakest, never certain.
+const SPREAD_MAX_BIAS = 4;
+
+function weightedPick(origins) {
+    const points = origins.map(origin => {
+        const info = statusFor(origin);
+
+        return info && typeof info.points === "number" ? info.points : null;
+    });
+
+    let low = null;
+    let high = null;
+
+    for (const value of points) {
+        if (value === null) {
+            continue;
+        }
+
+        if (low === null || value < low) {
+            low = value;
+        }
+
+        if (high === null || value > high) {
+            high = value;
+        }
+    }
+
+    // Nothing rates the candidates apart -- no status data at all, or every
+    // one scored identically. Spread uniformly rather than invent a bias.
+    if (low === null || high <= low) {
+        return origins[Math.floor(Math.random() * origins.length)];
+    }
+
+    // An instance the service doesn't rate sits at the bottom of the band
+    // rather than being dropped: it is still fully healthy as far as anything
+    // here knows, it just has no score to promote it.
+    const weights = points.map(value =>
+        1 + (SPREAD_MAX_BIAS - 1) * ((value === null ? low : value) - low) / (high - low)
+    );
+
+    let roll = Math.random() * weights.reduce((sum, weight) => sum + weight, 0);
+
+    for (let i = 0; i < origins.length; i++) {
+        roll -= weights[i];
+
+        if (roll < 0) {
+            return origins[i];
+        }
+    }
+
+    return origins[origins.length - 1];
+}
+
 // Used only for a brand-new X interception, never for within-navigation
 // fallback (switchInstance keeps pickInstance's strict ranked order there --
 // a failing attempt should retry the next-best *known* candidate
-// deterministically, not gamble again). Spreading fresh redirects uniformly
-// across every fully-healthy candidate, instead of always the single
-// top-ranked one, avoids concentrating every user on one instance -- the
-// dominant real failure mode (per-instance rate limiting) is exactly the
-// kind of load this creates. Falls back to the strict top pick when nothing
-// qualifies as fully healthy, so there is no path where the absence of a
-// clean instance lets X through.
+// deterministically, not gamble again). Spreading fresh redirects across the
+// fully-healthy candidates, instead of always the single top-ranked one,
+// avoids concentrating every user on one instance -- the dominant real
+// failure mode (per-instance rate limiting) is exactly the kind of load this
+// creates. Falls back to the strict top pick when nothing qualifies as fully
+// healthy, so there is no path where the absence of a clean instance lets X
+// through.
 function pickInitialInstance() {
     // A user-set preference wins over the random spread, but only while it's
     // actually healthy -- rankedTopTier already excludes anything locally
@@ -392,7 +452,7 @@ function pickInitialInstance() {
     }
 
     if (rankedTopTier.length > 0) {
-        return rankedTopTier[Math.floor(Math.random() * rankedTopTier.length)];
+        return weightedPick(rankedTopTier);
     }
 
     return pickInstance();
@@ -1385,6 +1445,24 @@ browser.webRequest.onCompleted.addListener(
 
         if (isCurrent && isHTMLResponse(details.responseHeaders)) {
             const failure = await pageShowsFailure(details.tabId);
+
+            // An anti-bot interstitial, not a page the instance served us.
+            // Never redirect away from it: the user may be part-way through
+            // solving it, and there is no way from here to tell someone
+            // working on a CAPTCHA apart from a challenge that will never
+            // clear. End the attempt and leave the tab alone -- but demote
+            // the instance briefly so the *next* fresh redirect prefers one
+            // that isn't challenging this user. Solving it loads a real page,
+            // whose recordLocal(OK) clears the demotion again straight away.
+            if (failure === "challenge") {
+                recordLocal(origin, "BROKEN", "busy");
+
+                if (sameAttempt(activeRedirects.get(details.tabId), origin, details.requestId)) {
+                    activeRedirects.delete(details.tabId);
+                }
+
+                return;
+            }
 
             if (failure) {
                 // executeScript above is async: the tab may have navigated

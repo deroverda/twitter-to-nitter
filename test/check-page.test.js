@@ -61,12 +61,12 @@ test("operator shutdown page (no Nitter markers) is an unknown-template failure,
     assert.equal(classifyHTML("shutdown-page.html"), "unknown");
 });
 
-test("Cloudflare challenge page is not a failure (transient)", () => {
-    assert.equal(classifyHTML("cloudflare-challenge.html"), false);
+test("Cloudflare challenge page reports as a challenge, not a failure", () => {
+    assert.equal(classifyHTML("cloudflare-challenge.html"), "challenge");
 });
 
-test("localized Cloudflare challenge is not a failure (fingerprint, not title)", () => {
-    assert.equal(classifyHTML("cloudflare-challenge-localized.html"), false);
+test("localized Cloudflare challenge is detected by fingerprint, not title", () => {
+    assert.equal(classifyHTML("cloudflare-challenge-localized.html"), "challenge");
 });
 
 test("RSS feed is not judged by markup", () => {

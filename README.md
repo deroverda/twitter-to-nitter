@@ -52,7 +52,8 @@ The extension also:
 * Remembers instances that failed for you and temporarily demotes them.
 * Temporarily stops redirecting a tab if it detects a redirect loop.
 * Detects failures regardless of how you reached Nitter: the extension's redirect, search result, bookmark, typed URL, or link clicked while already browsing Nitter.
-* Detects HTTP 200 pages that are actually instance failures, including custom operator shutdown pages, rate-limit pages, exhausted auth tokens, and known Nitter instance-error panels. A normal "not found" page and a Cloudflare human-verification page that is still resolving are not treated as failures.
+* Detects HTTP 200 pages that are actually instance failures, including custom operator shutdown pages, rate-limit pages, exhausted auth tokens, and known Nitter instance-error panels. A normal "not found" page is not treated as a failure.
+* Never navigates away from a human-verification challenge, so you can finish solving it. The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately.
 * Performs the page-content check only while the extension is actively deciding a tracked navigation, not during ordinary Nitter browsing.
 
 ## Instances
@@ -149,6 +150,7 @@ Some Nitter instances do not proxy media. On those instances, images and video l
 * Non-proxying Nitter instances load media from Twitter's CDN.
 * X-only paths such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, and `/privacy` remain on X.
 * Pressing **Back** after a fallback can trigger the same fallback again because the browser reloads the page the extension switched away from.
+* A human-verification challenge that never resolves is a dead end for that navigation. The extension will not redirect away from a challenge, because it cannot tell someone part-way through solving one from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised.
 * Failure phrases such as `"rate limit"`, `"no auth tokens"`, and `"too many requests"` are recognized only in English. Structural checks can still detect pages that do not resemble Nitter.
 
 ## No runtime dependencies
