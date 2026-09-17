@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Twitter/X to Nitter",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Redirect Twitter/X pages to a working Nitter frontend.",
   "icons": {
     "128": "icon.png"
