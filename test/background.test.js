@@ -16,6 +16,14 @@ const manifest = JSON.parse(
 );
 const SRC = readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
 
+// A manifest with one extra host permission not in SEED_INSTANCES, for tests
+// that need a status-service-only instance (permitted but never seeded).
+function statusOnlyManifest() {
+    const m = JSON.parse(JSON.stringify(manifest));
+    m.permissions.push("https://nitter.status-only.example/*");
+    return m;
+}
+
 const EXPORTS = [
     "originOf", "isRedirectablePath", "isHardFailure", "isDefinitiveNetworkFailure",
     "parseStatus", "sameAttempt", "candidateOrigins", "freshStatusHosts", "recordLocal",
@@ -246,19 +254,19 @@ test("a seed instance without a matching host permission is excluded from rankin
 });
 
 test("refreshStatus recomputes ranking even when its own fetch fails, dropping stale-promoted instances", async () => {
-    const bg2 = load();
+    const bg2 = load(statusOnlyManifest());
 
-    bg2.setStatus({ "nitter.xitter.cc": { healthy: true, points: 99, ping: 10 } }, Date.now());
+    bg2.setStatus({ "nitter.status-only.example": { healthy: true, points: 99, ping: 10 } }, Date.now());
     bg2.recomputeRanking();
-    assert.ok(bg2.getRanked().includes("https://nitter.xitter.cc"), "promoted instance should be ranked while status is fresh");
+    assert.ok(bg2.getRanked().includes("https://nitter.status-only.example"), "promoted instance should be ranked while status is fresh");
 
     // Age the same data past STATUS_STALE_MS (6h) without calling recomputeRanking
     // directly -- only refreshStatus() itself should be relied on to notice.
-    bg2.setStatus({ "nitter.xitter.cc": { healthy: true, points: 99, ping: 10 } }, Date.now() - 7 * 60 * 60 * 1000);
+    bg2.setStatus({ "nitter.status-only.example": { healthy: true, points: 99, ping: 10 } }, Date.now() - 7 * 60 * 60 * 1000);
     await bg2.refreshStatus();
 
     assert.ok(
-        !bg2.getRanked().includes("https://nitter.xitter.cc"),
+        !bg2.getRanked().includes("https://nitter.status-only.example"),
         "a stale-promoted instance must drop out of ranking once refreshStatus runs, even if its own fetch fails"
     );
 });
@@ -286,17 +294,16 @@ test("PERMITTED_ORIGINS is exactly the manifest's eight instance origins", () =>
 });
 
 test("candidateOrigins is the seed list until fresh status data adds to it", () => {
+    const bg2 = load(statusOnlyManifest());
     const sorted = (x) => Array.from(x).sort();
-    assert.deepEqual(sorted(bg.candidateOrigins()), sorted(bg.SEED_INSTANCES));
+    assert.deepEqual(sorted(bg2.candidateOrigins()), sorted(bg2.SEED_INSTANCES));
 
-    bg.setStatus({ "nitter.xitter.cc": { healthy: true } }, Date.now());
-    assert.ok(Array.from(bg.candidateOrigins()).includes("https://nitter.xitter.cc"));
+    bg2.setStatus({ "nitter.status-only.example": { healthy: true } }, Date.now());
+    assert.ok(Array.from(bg2.candidateOrigins()).includes("https://nitter.status-only.example"));
 
     // Stale data (older than STATUS_STALE_MS = 6h) is ignored.
-    bg.setStatus({ "nitter.xitter.cc": { healthy: true } }, Date.now() - 7 * 60 * 60 * 1000);
-    assert.ok(!Array.from(bg.candidateOrigins()).includes("https://nitter.xitter.cc"));
-
-    bg.setStatus(null, 0);
+    bg2.setStatus({ "nitter.status-only.example": { healthy: true } }, Date.now() - 7 * 60 * 60 * 1000);
+    assert.ok(!Array.from(bg2.candidateOrigins()).includes("https://nitter.status-only.example"));
 });
 
 test("a link clicked from inside a Nitter instance is still tracked for fallback", () => {
@@ -377,14 +384,14 @@ test("refreshStatus rejects an oversized response before parsing it", async () =
     const oversizedFetch = async () => ({
         status: 200,
         headers: { get: (name) => (name.toLowerCase() === "content-length" ? String(2 * 1024 * 1024) : null) },
-        json: async () => ({ hosts: [{ domain: "nitter.xitter.cc", healthy: true, points: 99 }] })
+        json: async () => ({ hosts: [{ domain: "nitter.status-only.example", healthy: true, points: 99 }] })
     });
-    const bg2 = load(undefined, oversizedFetch);
+    const bg2 = load(statusOnlyManifest(), oversizedFetch);
 
     await bg2.refreshStatus();
 
     assert.ok(
-        !Array.from(bg2.candidateOrigins()).includes("https://nitter.xitter.cc"),
+        !Array.from(bg2.candidateOrigins()).includes("https://nitter.status-only.example"),
         "an oversized response must be rejected before its data is parsed and applied"
     );
 });

@@ -68,10 +68,11 @@ The extension can use any instance currently reported healthy by the [health ser
 * `nitter.netbub.com`
 * `nitter.miningtcup.me`
 * `shitter.thepixora.com`
+* `nitter.xitter.cc`
 
 **Permitted superset** (`manifest.json`):
 
-The seed list plus `nitter.xitter.cc`.
+Same as the seed list.
 
 The health service can activate or deprioritise these domains between releases, but cannot introduce new domains. Hosts outside the manifest are discarded and re-checked at use time. Seed instances are never completely removed; unhealthy ones are simply pushed down the ranking.
 
