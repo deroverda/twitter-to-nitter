@@ -30,7 +30,9 @@ const EXPORTS = [
     "PERMITTED_ORIGINS", "PERMITTED_DOMAINS", "SEED_INSTANCES", "refreshStatus",
     "noteRedirect", "breakerOpen", "terminalFailurePage", "isHTMLResponse",
     "pickInitialInstance", "templateMismatchTripped", "NAV_TIMEOUT_MS",
-    "NAV_STREAM_TIMEOUT_MS", "MAX_FALLBACK_MS", "readBoundedJSON", "STATUS_MAX_BODY_BYTES"
+    "NAV_STREAM_TIMEOUT_MS", "MAX_FALLBACK_MS", "readBoundedJSON", "STATUS_MAX_BODY_BYTES",
+    "locallyBroken", "failureTTL", "FAILURE_BASE_TTL_MS", "FAILURE_STRIKE_WINDOW_MS",
+    "FAILURE_MAX_STRIKES"
 ];
 
 // A controllable fake clock and timer queue, so watchdog/switchInstance tests
@@ -438,6 +440,82 @@ test("recordLocal keeps BROKEN entries and drops cleared ones", () => {
 
     bg.recordLocal("https://nitter.kareem.one", "OK");
     assert.ok(!("https://nitter.kareem.one" in bg.getLocalHealth()));
+});
+
+test("demotion length follows the failure kind, not a single flat TTL", () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const origin = "https://nitter.kareem.one";
+
+    bg2.recordLocal(origin, "BROKEN", "busy");
+    assert.equal(bg2.failureTTL(bg2.getLocalHealth()[origin]), 5 * 60 * 1000);
+
+    bg2.recordLocal(origin, "OK");
+    bg2.recordLocal(origin, "BROKEN", "dead");
+    assert.equal(
+        bg2.failureTTL(bg2.getLocalHealth()[origin]),
+        30 * 60 * 1000,
+        "a host that doesn't resolve must outlast a rate limit by far -- conflating them demoted healthy-but-busy instances for half an hour"
+    );
+});
+
+test("a rate limit and a dead host no longer bench an instance for the same time", async () => {
+    const CT_HTML = [{ name: "Content-Type", value: "text/html" }];
+    const origin = "https://nitter.click";
+
+    const busy = load(undefined, undefined, undefined, { now: 0 });
+    busy.followListener({ type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack" });
+    await busy.onCompleted({
+        type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack",
+        statusCode: 429, responseHeaders: CT_HTML
+    });
+
+    const dead = load(undefined, undefined, undefined, { now: 0 });
+    dead.followListener({ type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack" });
+    dead.onErrorOccurred({
+        type: "main_frame", tabId: 1, requestId: "r1", url: origin + "/jack",
+        error: "NS_ERROR_UNKNOWN_HOST"
+    });
+
+    const tenMinutes = 10 * 60 * 1000;
+    assert.equal(busy.locallyBroken(origin, tenMinutes), false, "a 429 must clear well inside ten minutes");
+    assert.equal(dead.locallyBroken(origin, tenMinutes), true, "an unresolvable host must still be demoted at ten minutes");
+});
+
+test("repeat failures escalate the demotion, and a success clears the accumulated strikes", () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const origin = "https://nitter.kareem.one";
+    const base = 5 * 60 * 1000;
+
+    bg2.recordLocal(origin, "BROKEN", "busy");
+    assert.equal(bg2.getLocalHealth()[origin].strikes, 1);
+    assert.equal(bg2.failureTTL(bg2.getLocalHealth()[origin]), base);
+
+    bg2.recordLocal(origin, "BROKEN", "busy");
+    assert.equal(bg2.failureTTL(bg2.getLocalHealth()[origin]), 2 * base, "a second failure in the window costs longer than the first");
+
+    for (let i = 0; i < 10; i++) {
+        bg2.recordLocal(origin, "BROKEN", "busy");
+    }
+    assert.equal(
+        bg2.failureTTL(bg2.getLocalHealth()[origin]),
+        bg2.FAILURE_MAX_STRIKES * base,
+        "escalation is capped -- a flapping instance must not be benched indefinitely"
+    );
+
+    bg2.recordLocal(origin, "OK");
+    bg2.recordLocal(origin, "BROKEN", "busy");
+    assert.equal(bg2.getLocalHealth()[origin].strikes, 1, "a working load resets the instance's record");
+});
+
+test("an entry cached by an older version is still honoured and still expires", () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const origin = "https://nitter.kareem.one";
+
+    // No kind, no strikes -- the shape written before failure kinds existed.
+    bg2.getLocalHealth()[origin] = { state: "BROKEN", at: 0 };
+
+    assert.equal(bg2.locallyBroken(origin, 5 * 60 * 1000), true);
+    assert.equal(bg2.locallyBroken(origin, 11 * 60 * 1000), false, "a legacy entry falls back to the server-grade TTL rather than never expiring");
 });
 
 // ============================================================

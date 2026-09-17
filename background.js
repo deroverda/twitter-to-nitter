@@ -157,8 +157,24 @@ const STATUS_FETCH_TIMEOUT_MS = 8000;
 // parsed in the background page.
 const STATUS_MAX_BODY_BYTES = 1 * 1024 * 1024;
 
-// How long a locally observed hard failure keeps an instance demoted.
-const LOCAL_FAILURE_TTL_MS = 30 * 60 * 1000;
+// How long a locally observed failure keeps an instance demoted, scaled by
+// what actually went wrong. A rate limit means the instance is alive and
+// usually fine for everyone else -- it is often specific to this user's IP
+// and clears in minutes -- while a host that doesn't resolve is not coming
+// back on that timescale. Benching both for the same half hour demoted good
+// instances on a signal that didn't justify it.
+const FAILURE_BASE_TTL_MS = {
+    busy: 5 * 60 * 1000,
+    server: 10 * 60 * 1000,
+    dead: 30 * 60 * 1000
+};
+
+// Repeat failures inside this window escalate the demotion, so a one-off
+// blip costs only the base TTL while an instance that keeps failing is held
+// down progressively longer. Strikes reset once an instance goes this long
+// without a new failure, and any successful load clears them outright.
+const FAILURE_STRIKE_WINDOW_MS = 60 * 60 * 1000;
+const FAILURE_MAX_STRIKES = 4;
 
 // check-page.js's "unknown" verdict (the page doesn't render as Nitter at
 // all) never demotes an instance by itself -- see the tripwire below for why.
@@ -287,13 +303,21 @@ function candidateOrigins() {
     return Array.from(origins);
 }
 
+// An entry cached by an older version has no kind or strikes; treat it as a
+// single server-grade failure rather than carrying a migration path for it.
+function failureTTL(entry) {
+    const base = FAILURE_BASE_TTL_MS[entry.kind] || FAILURE_BASE_TTL_MS.server;
+
+    return base * Math.min(entry.strikes || 1, FAILURE_MAX_STRIKES);
+}
+
 function locallyBroken(origin, now) {
     const entry = localHealth[origin];
 
     return Boolean(
         entry &&
         entry.state === "BROKEN" &&
-        (now - entry.at) < LOCAL_FAILURE_TTL_MS
+        (now - entry.at) < failureTTL(entry)
     );
 }
 
@@ -546,12 +570,21 @@ async function refreshStatus() {
 // Local health, learned from real navigations
 // ============================================================
 
-function recordLocal(origin, state) {
+function recordLocal(origin, state, kind = "server") {
     // Only a BROKEN entry carries information (locallyBroken reads nothing
     // else). Recording OK just means "no longer known broken", so drop the
     // entry rather than let cleared failures pile up in storage.
     if (state === "BROKEN") {
-        localHealth[origin] = { state: state, at: Date.now() };
+        const now = Date.now();
+        const previous = localHealth[origin];
+        const escalating = Boolean(previous) && (now - previous.at) < FAILURE_STRIKE_WINDOW_MS;
+
+        localHealth[origin] = {
+            state: state,
+            at: now,
+            kind: kind,
+            strikes: escalating ? Math.min((previous.strikes || 1) + 1, FAILURE_MAX_STRIKES) : 1
+        };
     } else {
         // The common case -- every successful navigation calls this -- is an
         // instance that was already not marked broken. Skip the write and
@@ -1323,7 +1356,14 @@ browser.webRequest.onCompleted.addListener(
         }
 
         if (isHardFailure(details.statusCode) && !isCloudflareChallenge(details.statusCode, details.responseHeaders)) {
-            recordLocal(origin, "BROKEN");
+            // 429/408 mean the instance answered and is alive, just refusing
+            // this request right now; everything else in isHardFailure (auth,
+            // blocked, 5xx) says the instance itself couldn't serve us.
+            recordLocal(
+                origin,
+                "BROKEN",
+                (details.statusCode === 429 || details.statusCode === 408) ? "busy" : "server"
+            );
 
             if (isCurrent) {
                 // skipCommittedCheck: true -- reading the tab's committed URL
@@ -1363,7 +1403,10 @@ browser.webRequest.onCompleted.addListener(
                         // signal alone; see noteTemplateMismatch.
                         noteTemplateMismatch(origin);
                     } else {
-                        recordLocal(origin, "BROKEN");
+                        // check-page.js only returns "fail" on a named
+                        // rate-limit/auth-exhaustion phrase, which is an
+                        // alive-but-refusing instance, not a broken one.
+                        recordLocal(origin, "BROKEN", "busy");
                     }
 
                     switchInstance(details.tabId, origin, freshRecord.attemptId, {
@@ -1421,7 +1464,7 @@ browser.webRequest.onErrorOccurred.addListener(
         }
 
         if (isDefinitiveNetworkFailure(details.error)) {
-            recordLocal(origin, "BROKEN");
+            recordLocal(origin, "BROKEN", "dead");
         }
 
         if (isCurrent) {
