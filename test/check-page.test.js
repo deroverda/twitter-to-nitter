@@ -61,6 +61,10 @@ test("operator shutdown page (no Nitter markers) is an unknown-template failure,
     assert.equal(classifyHTML("shutdown-page.html"), "unknown");
 });
 
+test("shutdown page that kept Nitter's stylesheet link is still an unknown-template failure", () => {
+    assert.equal(classifyHTML("shutdown-page-keeping-stylesheet.html"), "unknown");
+});
+
 test("Cloudflare challenge page reports as a challenge, not a failure", () => {
     assert.equal(classifyHTML("cloudflare-challenge.html"), "challenge");
 });

@@ -83,11 +83,17 @@
 
     // 6. Doesn't render as Nitter at all: an operator's own shutdown or
     //    maintenance page, whatever its wording. Checking for the absence of
-    //    Nitter's own template markers (the same ones the CI markup check
-    //    trusts) catches these regardless of phrasing.
+    //    Nitter's own template markers catches these regardless of phrasing.
+    //
+    //    A "/css/style.css" link is deliberately not one of those markers,
+    //    even though the CI markup check still counts it: operators replacing
+    //    the page body commonly leave Nitter's static asset paths in place, so
+    //    the link survives on pages the template never rendered. Counting it
+    //    makes a shutdown notice pass as a healthy page, which fires no
+    //    fallback and leaves the user sitting on it. The two markers below
+    //    only appear when Nitter itself rendered the page.
     const looksLikeNitter = Boolean(
         document.querySelector('meta[property="og:site_name"][content="Nitter"]') ||
-        document.querySelector('link[href*="/css/style.css"]') ||
         document.querySelector(".inner-nav")
     );
 
