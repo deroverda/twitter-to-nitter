@@ -6,18 +6,19 @@
 
 # Twitter/X to Nitter
 
+[![Mozilla Add-on](https://img.shields.io/amo/v/twitter-x-to-nitter)](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/)
+[![Users](https://img.shields.io/amo/users/twitter-x-to-nitter)](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Release](https://img.shields.io/github/v/release/deroverda/twitter-to-nitter)
 ![Last Commit](https://img.shields.io/github/last-commit/deroverda/twitter-to-nitter)
 
 A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working Nitter frontend.
 
 The X request is **intercepted before it leaves your browser**. X never receives the navigation or gets to load first.
 
-> [!NOTE]
-> **August 2026 cease-and-desist, September recovery.** On 24 August 2026, X Corp. sent cease-and-desist letters demanding the takedown of Nitter instances and the upstream [Nitter project](https://github.com/zedeus/nitter), causing most public instances to shut down. In early September, after legal advice, the project announced it would continue ("Nitter lives") and instances began returning. The upstream repository was archived on 11 September 2026; individual Nitter-compatible instances remain separately operated. This extension now follows the [live instance health service](https://status.d420.de/), activating and dropping permitted instances as their status changes. The fleet remains smaller and less stable than before; if all reachable instances fail, the extension shows a failure page rather than sending you to X.
+**[Install from Firefox Add-ons (AMO)](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/)**
 
-> **Firefox Add-ons (AMO):** A public listing was submitted on 17 September 2026 and is pending Mozilla's review; it isn't live yet. Until it publishes, install the signed `.xpi` from the [latest release](https://github.com/deroverda/twitter-to-nitter/releases/latest) (see [Install](#install)).
+> [!NOTE]
+> Since X Corp.'s cease-and-desist letters in August 2026, fewer public Nitter instances are running and they are less stable than before. To cope with this, the extension follows a [live instance health service](https://status.d420.de/) and falls back automatically; if every instance fails, it shows a failure page rather than sending you to X. See [Background](#background) for the full story.
 
 ## What it does
 
@@ -84,18 +85,22 @@ A daily CI check compares the seed list and permitted superset with the health s
 
 ### Maintaining a fork
 
+A fork needs its own add-on ID: change `browser_specific_settings.gecko.id` in `manifest.json` before signing, since the current ID belongs to the AMO listing.
+
 Adding a new domain requires:
 
 1. Add it to `SEED_INSTANCES` in `background.js`.
 2. Add its host permission to `manifest.json`.
 3. Bump the version.
-4. Re-sign and publish a new `.xpi`.
+4. Sign and distribute a new `.xpi`.
 
 Domains already in the permitted superset require no release to become active or inactive.
 
 ## Install
 
-### Temporary development install
+Install from [Firefox Add-ons](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically.
+
+### Development install
 
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on**.
@@ -103,17 +108,9 @@ Domains already in the permitted superset require no release to become active or
 
 Temporary installations are removed when Firefox restarts.
 
-### Permanent install
-
-Download the signed `.xpi` from the [latest release](https://github.com/deroverda/twitter-to-nitter/releases/latest), then install through:
-
-**`about:addons` → gear icon → Install Add-on From File...**
-
-Releases are privately signed, unlisted builds created with [`web-ext sign`](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/) using a free Mozilla developer account.
-
 ## Permissions and why they are needed
 
-* `webRequest` + `webRequestBlocking` - intercept X/Twitter navigation **before it is sent** and observe Nitter response status.
+* `webRequest` + `webRequestBlocking` - intercept X/Twitter navigation before it is sent and observe Nitter response status.
 * X/Twitter host access, including `www.`, `mobile.`, and `m.` - required to intercept those requests.
 * Host access to the permitted Nitter instances - required to redirect to them and inspect their responses.
 * `status.d420.de/api/*` - fetches fleet health data. No other path on that domain is requested.
@@ -147,10 +144,14 @@ Some Nitter instances do not proxy media. On those instances, images and video l
 * Nitter's **Open in X** link is intercepted too. Use a private window or disable the extension to deliberately open X.
 * The health service can only activate domains already permitted by `manifest.json`; new domains require a release.
 * Non-proxying Nitter instances load media from Twitter's CDN.
-* X-only paths such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, and `/privacy` remain on X.
+* X-only paths listed under [What it does](#what-it-does) remain on X.
 * Pressing **Back** after a fallback can trigger the same fallback again because the browser reloads the page the extension switched away from.
 * A Cloudflare challenge that never resolves is a dead end for that navigation. The extension will not redirect away from one, because it cannot tell someone part-way through solving it from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised. Challenges from other providers are detected only as "this did not render as Nitter", so the extension falls back to the next instance instead of waiting for you to solve them.
-* Failure phrases such as `"rate limit"`, `"no auth tokens"`, and `"too many requests"` are recognized only in English. Structural checks can still detect pages that do not resemble Nitter.
+* Failure phrases such as `"rate limit"`, `"no auth tokens"`, and `"too many requests"` are recognised only in English. Structural checks can still detect pages that do not resemble Nitter.
+
+## Background
+
+On 24 August 2026, X Corp. sent cease-and-desist letters demanding the takedown of Nitter instances and the upstream [Nitter project](https://github.com/zedeus/nitter), causing most public instances to shut down. In early September, after legal advice, the project announced it would continue ("Nitter lives") and instances began returning. The upstream repository was archived on 11 September 2026; individual Nitter-compatible instances remain separately operated.
 
 ## No runtime dependencies
 
@@ -163,6 +164,7 @@ The extension ships only:
 * `terminal-failure.js`
 * `popup.html`
 * `popup.js`
+* `icon.png`
 
 There is no build step, framework, or bundled dependency.
 
