@@ -6,8 +6,8 @@
 
 # Twitter/X to Nitter
 
-[![Mozilla Add-on](https://img.shields.io/amo/v/twitter-x-to-nitter)](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/)
-[![Users](https://img.shields.io/amo/users/twitter-x-to-nitter)](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/)
+[![Mozilla Add-on](https://img.shields.io/amo/v/twitter-x-to-nitter)](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/)
+[![Users](https://img.shields.io/amo/users/twitter-x-to-nitter)](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Last Commit](https://img.shields.io/github/last-commit/deroverda/twitter-to-nitter)
 
@@ -15,7 +15,7 @@ A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working N
 
 The X request is **intercepted before it leaves your browser**. X never receives the navigation or gets to load first.
 
-**[Install from Firefox Add-ons (AMO)](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/)**
+**[Install from Firefox Add-ons (AMO)](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/)**
 
 > [!NOTE]
 > Since X Corp.'s cease-and-desist letters in August 2026, fewer public Nitter instances are running and they are less stable than before. To cope with this, the extension follows a [live instance health service](https://status.d420.de/) and falls back automatically; if every instance fails, it shows a failure page rather than sending you to X. See [Background](#background) for the full story.
@@ -98,7 +98,7 @@ Domains already in the permitted superset require no release to become active or
 
 ## Install
 
-Install from [Firefox Add-ons](https://addons.mozilla.org/en-GB/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically.
+Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically.
 
 ### Development install
 
