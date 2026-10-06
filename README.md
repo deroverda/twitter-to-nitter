@@ -79,7 +79,7 @@ The health service can activate or deprioritise these domains between releases, 
 
 If every reachable instance is unhealthy, the extension still redirects to the least-bad configured instance rather than X.
 
-A daily CI check compares the seed list and permitted superset with the health service, flags healthy instances that still need host permission, and verifies that seed instances serve real Nitter markup.
+A daily CI check compares the seed list and permitted superset with the health service, flags healthy instances that still need host permission, and checks that each permitted instance serves real Nitter markup, reporting bot-check pages separately.
 
 ### Maintaining a fork
 
@@ -96,7 +96,7 @@ Domains already in the permitted superset require no release to become active or
 
 ## Install
 
-Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically.
+Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically. Requires Firefox 142 or newer (desktop).
 
 ### Development install
 
