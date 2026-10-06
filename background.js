@@ -395,9 +395,21 @@ function recomputeRanking() {
   // reported unhealthy by the status service. Kept separately so a fresh
   // redirect can be spread across all of them instead of always landing on
   // whichever one happens to sort first; see pickInitialInstance().
-  rankedTopTier = scored
-    .filter((entry) => entry.broken === 0 && entry.unhealthy === 0)
-    .map((entry) => entry.origin);
+  const clean = scored.filter(
+    (entry) => entry.broken === 0 && entry.unhealthy === 0,
+  );
+
+  // While status data is fresh, an instance it doesn't track at all has no
+  // evidence behind it, and a dead seed stays untracked forever (one reset
+  // the connection and kept winning fresh redirects). Keep those out of the
+  // spread; they still rank after every tracked healthy one for fallback.
+  // Without fresh data every instance is unknown, and if none of the clean
+  // ones is tracked there is nothing better to prefer, so nothing is filtered.
+  const tracked = clean.filter((entry) => !entry.unknown);
+
+  rankedTopTier = (tracked.length > 0 ? tracked : clean).map(
+    (entry) => entry.origin,
+  );
 }
 
 // Least-bad selection: the ranking always includes the full seed list, so there

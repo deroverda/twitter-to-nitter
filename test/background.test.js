@@ -532,31 +532,78 @@ test("response time sways the spread, not just the health score", () => {
     assert.ok(counts[slow] > 0, "the slower instance must still get picked sometimes");
 });
 
-test("an unrated instance stays in the spread instead of being starved out", () => {
-    const unrated = "https://shitter.thepixora.com";
+function spreadPicks(bg2, count) {
+    const picks = new Set();
 
-    // Two rated instances, so the signal can discriminate; a third with no
-    // status entry at all must still be reachable.
+    for (let n = 0; n < count; n++) {
+        picks.add(bg2.pickInitialInstance());
+    }
+
+    return picks;
+}
+
+function sweepingRandom() {
+    let i = 0;
+    const sequence = Array.from({ length: 100 }, (_, n) => n / 100);
+    return () => sequence[i++ % sequence.length];
+}
+
+test("a tracked instance with no score stays in the spread instead of being starved out", () => {
+    const unscored = "https://shitter.thepixora.com";
+
+    // Two scored instances, so the signal can discriminate; a third the
+    // service tracks but gives no points or ping must still be reachable.
+    const hosts = {
+        "nitter.click": { healthy: true, points: 55, ping: 276 },
+        "nitter.netbub.com": { healthy: true, points: 40, ping: 900 },
+        "shitter.thepixora.com": { healthy: true, points: null, ping: null }
+    };
+
+    const bg2 = load(undefined, undefined, sweepingRandom());
+    bg2.setStatus(hosts, Date.now());
+    bg2.recomputeRanking();
+
+    assert.ok(spreadPicks(bg2, 100).has(unscored), "an instance the service tracks as healthy must keep a share of the spread");
+});
+
+test("while status data is fresh, a seed the service doesn't track is left out of the spread but kept as a fallback", () => {
+    const untracked = "https://shitter.thepixora.com";
     const hosts = {
         "nitter.click": { healthy: true, points: 55, ping: 276 },
         "nitter.netbub.com": { healthy: true, points: 40, ping: 900 }
     };
 
-    let i = 0;
-    const sequence = Array.from({ length: 100 }, (_, n) => n / 100);
-    const bg2 = load(undefined, undefined, () => sequence[i++ % sequence.length]);
+    const bg2 = load(undefined, undefined, sweepingRandom());
     bg2.setStatus(hosts, Date.now());
     bg2.recomputeRanking();
 
-    let unratedPicks = 0;
+    assert.ok(!spreadPicks(bg2, 100).has(untracked), "no evidence it works, so it must not take fresh redirects");
+    assert.ok(Array.from(bg2.getRanked()).includes(untracked), "still a candidate for within-navigation fallback");
+    assert.ok(
+        bg2.getRanked().indexOf(untracked) > bg2.getRanked().indexOf("https://nitter.netbub.com"),
+        "ranked after the tracked healthy instances"
+    );
+});
 
-    for (let n = 0; n < 100; n++) {
-        if (bg2.pickInitialInstance() === unrated) {
-            unratedPicks++;
-        }
-    }
+test("without fresh status data every seed stays in the spread", () => {
+    const bg2 = load(undefined, undefined, sweepingRandom());
 
-    assert.ok(unratedPicks > 0, "an instance the service doesn't rate is still fully healthy and must keep a share of the spread");
+    assert.equal(spreadPicks(bg2, 200).size, bg2.SEED_INSTANCES.length);
+
+    bg2.setStatus({ "nitter.click": { healthy: true } }, Date.now() - 7 * 60 * 60 * 1000);
+    bg2.recomputeRanking();
+
+    assert.equal(spreadPicks(bg2, 200).size, bg2.SEED_INSTANCES.length, "stale data is ignored, so nothing is filtered");
+});
+
+test("if the service tracks none of the otherwise-clean instances, nothing is filtered out of the spread", () => {
+    const bg2 = load(undefined, undefined, sweepingRandom());
+
+    // Only an unhealthy entry is tracked, so every clean candidate is untracked.
+    bg2.setStatus({ "nitter.kareem.one": { healthy: false } }, Date.now());
+    bg2.recomputeRanking();
+
+    assert.equal(spreadPicks(bg2, 200).size, bg2.SEED_INSTANCES.length);
 });
 
 test("pickInitialInstance falls back to the strict top pick once every candidate is locally broken", () => {
