@@ -71,7 +71,7 @@ The extension can use any instance currently reported healthy by the [health ser
 
 **Permitted superset** (`manifest.json`):
 
-The seed list plus `nitter.kareem.one`, `nitter.click`, and `nitter.miningtcup.me`. `nitter.kareem.one` was dropped from the seed list in September 2026 after repeated 502s; the other two were dropped in October 2026 because they no longer respond. All three stay permitted so they can return without a release if they recover.
+The seed list plus `nitter.kareem.one`, `nitter.click`, and `nitter.miningtcup.me`. These three were dropped from the seed list after repeated failures but stay permitted, so the health service can bring them back without a release when they recover.
 
 The health service can activate or deprioritise these domains between releases, but cannot introduce new domains. Hosts outside the manifest are discarded and re-checked at use time. Seed instances are never completely removed; unhealthy ones are simply pushed down the ranking.
 
@@ -128,9 +128,9 @@ The X permission is necessary because blocking a request requires host permissio
   * If a redirect loop is detected, interception is briefly disabled for that tab and the request can reach X.
   * `t.co` links are not intercepted, so Twitter's URL shortener sees the click before the resulting X navigation is redirected.
 * **One Nitter instance receives each request at a time.** A failed instance may be followed sequentially by another permitted instance during the same navigation, never simultaneously and never outside the permitted superset.
-* **The health service receives no browsing data.** The extension requests one fixed, parameter-free URL without cookies about every 15 minutes, identically for every user. It is never contacted as part of navigation.
+* **The health service receives no browsing data.** The extension requests one fixed, parameter-free URL without cookies about every 15 minutes, identically for every user. It is never contacted as part of navigation. As with any web request, its operator can see your IP address.
 * **No Nitter probing.** Instance-specific health comes only from pages the user actually loads.
-* **Page checks are minimal.** The extension checks whether a loaded page resembles Nitter and, if so, whether Nitter's own error panel identifies a known instance failure. It does not read, store, or transmit searches, profiles, tweet content, or other page data. The check produces only a temporary pass/fail/unknown result for that navigation.
+* **Page checks stay in your browser.** For a navigation the extension is tracking, a small script reads the page's markup and text to tell a Nitter page from a verification page, an error page, or something else. That includes searching the text for known failure phrases such as "rate limit". The page is not stored or sent anywhere; only a temporary result for that navigation is kept.
 * Instance health and rankings remain local to the browser.
 
 ### Media privacy
