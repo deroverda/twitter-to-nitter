@@ -1004,6 +1004,27 @@ function isRedirectablePath(pathname) {
   return withoutLocale === pathname || !isXOnlySurface(withoutLocale);
 }
 
+// X appends these to shared links: s is the share surface, t a per-share
+// token, ref_src and ref_url record where the link was embedded. Nitter reads
+// none of them (checked against src/routes in zedeus/nitter; its only `s` is a
+// path segment), so forwarding them only hands X's tracking token to the
+// instance operator. Matched on the raw key so every other parameter keeps its
+// exact original encoding.
+const X_TRACKING_PARAMS = new Set(["s", "t", "ref_src", "ref_url"]);
+
+function stripTrackingParams(search) {
+  if (!search) {
+    return "";
+  }
+
+  const kept = search
+    .slice(1)
+    .split("&")
+    .filter((pair) => pair && !X_TRACKING_PARAMS.has(pair.split("=")[0]));
+
+  return kept.length > 0 ? "?" + kept.join("&") : "";
+}
+
 // ============================================================
 // Redirect loop circuit breaker
 //
@@ -1108,7 +1129,7 @@ browser.webRequest.onBeforeRequest.addListener(
       return {};
     }
 
-    const path = url.pathname + url.search;
+    const path = url.pathname + stripTrackingParams(url.search);
 
     // A new X interception on this tab supersedes whatever the tab was
     // doing before; clear any watchdog left over from that prior attempt

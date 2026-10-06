@@ -46,7 +46,7 @@ The candidate list combines two independent sources:
 
 The extension also:
 
-* Preserves the original path and query string.
+* Preserves the original path and query string, minus X's share-tracking parameters (`s`, `t`, `ref_src`, `ref_url`). Nitter ignores them, so forwarding them would only pass X's tracking token to the instance operator.
 * Redirects canonical status URLs including `/i/status/<id>` and `/i/web/status/<id>`.
 * Leaves X-only surfaces such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, `/privacy`, and the rest of `/i/*` on X.
 * Treats a 404 as a valid Nitter response.

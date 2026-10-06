@@ -32,7 +32,7 @@ const EXPORTS = [
     "pickInitialInstance", "templateMismatchTripped", "NAV_TIMEOUT_MS",
     "NAV_STREAM_TIMEOUT_MS", "MAX_FALLBACK_MS", "readBoundedJSON", "STATUS_MAX_BODY_BYTES",
     "locallyBroken", "failureTTL", "FAILURE_BASE_TTL_MS", "FAILURE_STRIKE_WINDOW_MS",
-    "FAILURE_MAX_STRIKES"
+    "FAILURE_MAX_STRIKES", "stripTrackingParams"
 ];
 
 // A controllable fake clock and timer queue, so watchdog/switchInstance tests
@@ -427,6 +427,32 @@ test("refreshStatus rejects an oversized response before parsing it", async () =
         !Array.from(bg2.candidateOrigins()).includes("https://nitter.status-only.example"),
         "an oversized response must be rejected before its data is parsed and applied"
     );
+});
+
+test("stripTrackingParams drops X's share-tracking parameters and leaves every other parameter byte-for-byte", () => {
+    assert.equal(bg.stripTrackingParams(""), "");
+    assert.equal(bg.stripTrackingParams("?s=20&t=AbC-123_x"), "");
+    assert.equal(bg.stripTrackingParams("?t=AbC&s=46"), "");
+    assert.equal(bg.stripTrackingParams("?s=20&f=live"), "?f=live");
+    assert.equal(bg.stripTrackingParams("?q=a%20b+c&s=20&since=2024-01-01"), "?q=a%20b+c&since=2024-01-01");
+    assert.equal(bg.stripTrackingParams("?ref_src=twsrc%5Etfw&ref_url=https%3A%2F%2Fexample.com&tab=media"), "?tab=media");
+    assert.equal(bg.stripTrackingParams("?s"), "");
+    assert.equal(bg.stripTrackingParams("?s=&&t"), "");
+});
+
+test("stripTrackingParams matches whole keys only, not parameters that merely start with s or t", () => {
+    assert.equal(bg.stripTrackingParams("?src=typed_query&status=1&text=hi&tab=media&since=1&until=2"), "?src=typed_query&status=1&text=hi&tab=media&since=1&until=2");
+    assert.equal(bg.stripTrackingParams("?S=20&T=abc"), "?S=20&T=abc", "keys are case-sensitive, as X sends them lowercase");
+});
+
+test("a shared X link is redirected without its tracking parameters, and fallback keeps the cleaned path", () => {
+    const bg2 = load();
+    const tabId = 7001;
+
+    const redirect = bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack/status/20?s=20&t=AbC-123&lang=en" });
+
+    assert.ok(redirect.redirectUrl.endsWith("/jack/status/20?lang=en"), redirect.redirectUrl);
+    assert.equal(bg2.getActiveRedirects().get(tabId).path, "/jack/status/20?lang=en");
 });
 
 test("terminalFailurePage returns a packaged extension page, not a data: URL", () => {
