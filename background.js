@@ -287,6 +287,7 @@ let templateMismatchTrippedUntil = 0;
 
 let ranked = SAFE_SEED_INSTANCES.slice();
 let rankedTopTier = SAFE_SEED_INSTANCES.slice();
+let rankedClean = SAFE_SEED_INSTANCES.slice();
 
 // ============================================================
 // Ranking
@@ -406,6 +407,10 @@ function recomputeRanking() {
   // Without fresh data every instance is unknown, and if none of the clean
   // ones is tracked there is nothing better to prefer, so nothing is filtered.
   const tracked = clean.filter((entry) => !entry.unknown);
+
+  // A user-set preference only needs "no known problem", not "tracked": an
+  // omission from the status data says nothing against an instance they chose.
+  rankedClean = clean.map((entry) => entry.origin);
 
   rankedTopTier = (tracked.length > 0 ? tracked : clean).map(
     (entry) => entry.origin,
@@ -539,10 +544,10 @@ function weightedPick(origins) {
 // through.
 function pickInitialInstance() {
   // A user-set preference wins over the random spread, but only while it's
-  // actually healthy -- rankedTopTier already excludes anything locally
-  // broken or reported unhealthy, so this can never strand a tab on a known
-  // -bad instance just because it was preferred.
-  if (preferredInstance && rankedTopTier.includes(preferredInstance)) {
+  // actually healthy -- rankedClean excludes anything locally broken or
+  // reported unhealthy, so this can never strand a tab on a known-bad
+  // instance just because it was preferred.
+  if (preferredInstance && rankedClean.includes(preferredInstance)) {
     return preferredInstance;
   }
 

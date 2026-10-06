@@ -1340,6 +1340,22 @@ test("pickInitialInstance prefers a set instance while it's healthy", async () =
     assert.equal(bg2.pickInitialInstance(), preferred);
 });
 
+test("a preferred instance the fresh status data omits is still honored", async () => {
+    const bg2 = load(undefined, undefined, sweepingRandom());
+    const preferred = "https://shitter.thepixora.com";
+
+    await bg2.sendMessage({ type: "setPreferred", origin: preferred });
+    bg2.setStatus({
+        "nitter.meowing.monster": { healthy: true, points: 50, ping: 500 },
+        "nitter.netbub.com": { healthy: true, points: 50, ping: 500 }
+    }, Date.now());
+    bg2.recomputeRanking();
+
+    assert.ok(!Array.from(bg2.getRankedTopTier()).includes(preferred), "untracked, so outside the spread");
+    assert.equal(spreadPicks(bg2, 50).size, 1);
+    assert.ok(spreadPicks(bg2, 50).has(preferred), "an omission from the status data says nothing against an instance the user chose");
+});
+
 test("pickInitialInstance falls through to the normal spread once the preferred instance is broken", async () => {
     const bg2 = load();
     await flushMicrotasks();
