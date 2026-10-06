@@ -160,7 +160,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify seed instances serve real Nitter markup
+      - name: Verify permitted instances serve real Nitter markup
         run: |
           set -uo pipefail
 
@@ -168,6 +168,11 @@ jobs:
           # (src/views/general.nim), which every server-rendered page passes
           # through. og:site_name is a hardcoded literal, so rebranded forks
           # still match. Errors render into .error-panel.
+          #
+          # A /css/style.css link is deliberately not a marker: operators who
+          # replace the page body often leave it in place, so it appears on
+          # pages Nitter never rendered (check-page.js ignores it for the same
+          # reason).
           #
           # This check lives here rather than in the extension so that users'
           # browsers never generate probe traffic to public instances.
@@ -177,28 +182,35 @@ jobs:
           {
             echo "### Nitter markup verification"
             echo ""
-            echo "_Runs from a GitHub datacenter IP. Instances behind anti-bot"
-            echo "challenges will show as CHALLENGE here even when they work fine in"
-            echo "a real browser, which is exactly why the extension no longer probes._"
+            echo "_Covers every permitted instance, not just the seed list. Runs from a"
+            echo "GitHub datacenter IP, so an instance can answer differently here than"
+            echo "in a real browser, which is exactly why the extension no longer probes."
+            echo "Bot-check pages are the Cloudflare, Anubis and go-away markers"
+            echo "check-page.js recognises and waits out._"
             echo ""
-            echo "| Instance | HTTP | Verdict |"
-            echo "|---|---|---|"
+            echo "| Instance | Seed | HTTP | Verdict |"
+            echo "|---|---|---|---|"
 
             while read -r host; do
-              code=$(curl -s -o body.html -w "%{http_code}" --max-time 15 -L -A "$UA" "https://$host/jack" || echo "000")
+              rm -f body.html
+              code=$(curl -s -o body.html -w "%{http_code}" --max-time 15 -L -A "$UA" "https://$host/jack" || true)
 
-              if [ "$code" != "200" ]; then
+              if grep -qE 'anubis_challenge|/go-away/cmd/go-away/|/cdn-cgi/challenge-platform|id="challenge-form"' body.html 2>/dev/null; then
+                verdict="bot-check page (the extension waits these out)"
+              elif [ "$code" != "200" ]; then
                 verdict="unreachable / HTTP $code"
-              elif grep -qiE 'property="og:site_name"[^>]*content="Nitter"|/css/style\.css|class="inner-nav"' body.html; then
+              elif grep -qiE 'property="og:site_name"[^>]*content="Nitter"|class="inner-nav"' body.html; then
                 if grep -qi 'class="error-panel"' body.html; then
                   verdict="Nitter, but serving an error panel"
                 else
                   verdict="OK - real Nitter markup"
                 fi
               else
-                verdict="CHALLENGE / not recognisable as Nitter"
+                verdict="not recognisable as Nitter (shutdown page, queue, or an unknown challenge)"
               fi
 
-              echo "| $host | $code | $verdict |"
-            done < shipped.txt
+              if grep -qx "$host" shipped.txt; then seed="yes"; else seed="no"; fi
+
+              echo "| $host | $seed | $code | $verdict |"
+            done < manifest-hosts.txt
           } >> "$GITHUB_STEP_SUMMARY"
