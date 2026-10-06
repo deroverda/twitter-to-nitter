@@ -54,7 +54,7 @@ The extension also:
 * Temporarily stops redirecting a tab if it detects a redirect loop.
 * Detects failures regardless of how you reached Nitter: the extension's redirect, search result, bookmark, typed URL, or link clicked while already browsing Nitter.
 * Detects HTTP 200 pages that are actually instance failures, including custom operator shutdown pages, rate-limit pages, exhausted auth tokens, and known Nitter instance-error panels. A normal "not found" page is not treated as a failure.
-* Never navigates away from a Cloudflare human-verification challenge, so you can finish solving it. The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately. Anti-bot interstitials from other providers are not recognised and are treated as pages that failed to render.
+* Never navigates away from a Cloudflare, Anubis, or go-away verification page, so you can finish solving it (Anubis and go-away usually solve themselves without any input from you). The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately. Anti-bot interstitials from other providers are not recognised and are treated as pages that failed to render.
 * Performs the page-content check only while the extension is actively deciding a tracked navigation, not during ordinary Nitter browsing.
 
 ## Instances
@@ -146,7 +146,7 @@ Some Nitter instances do not proxy media. On those instances, images and video l
 * Non-proxying Nitter instances load media from Twitter's CDN.
 * X-only paths listed under [What it does](#what-it-does) remain on X.
 * Pressing **Back** after a fallback can trigger the same fallback again because the browser reloads the page the extension switched away from.
-* A Cloudflare challenge that never resolves is a dead end for that navigation. The extension will not redirect away from one, because it cannot tell someone part-way through solving it from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised. Challenges from other providers are detected only as "this did not render as Nitter", so the extension falls back to the next instance instead of waiting for you to solve them.
+* A Cloudflare, Anubis, or go-away challenge that never resolves is a dead end for that navigation, for example Anubis with JavaScript blocked. The extension will not redirect away from one, because it cannot tell someone part-way through solving it from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised. Challenges from other providers are detected only as "this did not render as Nitter", so the extension falls back to the next instance instead of waiting for you to solve them.
 * Failure phrases such as `"rate limit"`, `"no auth tokens"`, and `"too many requests"` are recognised only in English. Structural checks can still detect pages that do not resemble Nitter.
 
 ## Background

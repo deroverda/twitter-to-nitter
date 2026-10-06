@@ -7,7 +7,7 @@
 //
 // Returns one of four values: false when the page is fine (a real page or a
 // "not found" result); "challenge" for an anti-bot interstitial that hasn't
-// resolved yet; "fail" for a confidently-identified instance failure (a named
+// resolved yet (Cloudflare, Anubis or go-away); "fail" for a confidently-identified instance failure (a named
 // rate-limit/auth phrase, in content or Nitter's own error panel); "unknown"
 // when the page merely doesn't look like Nitter's template at all. "unknown"
 // still triggers fallback for this navigation (the page isn't usable either
@@ -33,9 +33,18 @@
     //    #challenge-form; the localized "just a moment" title is only a cheap
     //    secondary signal, not the primary gate (it is English-only and
     //    Cloudflare translates it).
+    //
+    //    Anubis and go-away are the self-hosted equivalents several instances
+    //    run. Both solve themselves in the browser within a second or two and
+    //    then reload the real page, so switching away mid-solve skips a working
+    //    instance and never lets the browser earn the pass cookie. Anubis ships
+    //    its parameters in script#anubis_challenge; go-away serves its assets
+    //    and its meta-refresh from its own /go-away/cmd/go-away/ path.
     if (
         document.querySelector('script[src*="/cdn-cgi/challenge-platform"]') ||
         document.querySelector("#challenge-form") ||
+        document.querySelector("script#anubis_challenge") ||
+        document.querySelector('[href*="/go-away/cmd/go-away/"], [src*="/go-away/cmd/go-away/"]') ||
         (document.title || "").toLowerCase().includes("just a moment")
     ) {
         return "challenge";

@@ -73,6 +73,22 @@ test("localized Cloudflare challenge is detected by fingerprint, not title", () 
     assert.equal(classifyHTML("cloudflare-challenge-localized.html"), "challenge");
 });
 
+test("Anubis challenge page reports as a challenge, not an unknown template", () => {
+    assert.equal(classifyHTML("anubis-challenge.html"), "challenge");
+});
+
+test("Anubis page that loads its script from a honeypot path is still a challenge", () => {
+    assert.equal(classifyHTML("anubis-challenge-honeypot.html"), "challenge");
+});
+
+test("go-away challenge page reports as a challenge, not an unknown template", () => {
+    assert.equal(classifyHTML("go-away-challenge.html"), "challenge");
+});
+
+test("an operator's waiting-room page with no challenge markers is still an unknown template", () => {
+    assert.equal(classifyHTML("access-queue.html"), "unknown");
+});
+
 test("RSS feed is not judged by markup", () => {
     assert.equal(classifyXML("rss-feed.xml"), false);
 });
