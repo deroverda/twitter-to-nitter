@@ -79,8 +79,6 @@ The health service can activate or deprioritise these domains between releases, 
 
 If every reachable instance is unhealthy, the extension still redirects to the least-bad configured instance rather than X.
 
-A daily CI check compares the seed list and permitted superset with the health service, flags healthy instances that still need host permission, and checks that each permitted instance serves real Nitter markup, reporting bot-check pages separately.
-
 ### Maintaining a fork
 
 A fork needs its own add-on ID: change `browser_specific_settings.gecko.id` in `manifest.json` before signing, since the current ID belongs to the AMO listing.
