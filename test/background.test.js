@@ -873,6 +873,132 @@ test("a pure timeout with no response at all falls back once NAV_TIMEOUT_MS elap
     assert.equal(bg2.getTabUpdateCalls().length, 1, "the dead-timeout must fall back once it elapses");
 });
 
+// The watchdog's liveness check decides whether a silent attempt is a hanging
+// instance (fall back) or a tab the user already moved on from (leave alone).
+// The URL-less case is the one that matters most: clicking an X link from an
+// external site leaves the tab pending on an origin the extension can't read.
+
+function startAttempt(bg2, tabId) {
+    const redirect = bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack" });
+    const origin = new URL(redirect.redirectUrl).origin;
+
+    return origin;
+}
+
+test("watchdog still falls back when the tab is pending with no readable URL, as after clicking an X link on an external site", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6100;
+    const origin = startAttempt(bg2, tabId);
+
+    bg2.setTab(undefined, "loading");
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+
+    assert.equal(bg2.getTabUpdateCalls().length, 1, "a hanging instance must not be mistaken for a tab that moved away");
+    assert.ok(!bg2.getTabUpdateCalls()[0].url.startsWith(origin), "the fallback must go to a different instance");
+});
+
+test("watchdog leaves the tab alone once it finished loading a site the extension can't read", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6101;
+
+    startAttempt(bg2, tabId);
+
+    bg2.setTab(undefined, "complete");
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+
+    assert.equal(bg2.getTabUpdateCalls().length, 0, "must not yank the user back to Nitter from a page they navigated to");
+    assert.equal(bg2.getActiveRedirects().has(tabId), false, "the abandoned attempt is dropped");
+});
+
+test("watchdog leaves the tab alone once it finished loading a different permitted instance", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6102;
+    const origin = startAttempt(bg2, tabId);
+    const other = bg2.SEED_INSTANCES.find((seed) => seed !== origin);
+
+    bg2.setTab(other + "/jack", "complete");
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+
+    assert.equal(bg2.getTabUpdateCalls().length, 0);
+    assert.equal(bg2.getActiveRedirects().has(tabId), false);
+});
+
+test("watchdog still falls back when the tab finished loading the very instance it was waiting on", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6103;
+    const origin = startAttempt(bg2, tabId);
+
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+
+    assert.equal(bg2.getTabUpdateCalls().length, 1, "the same origin is not a tab that moved away");
+});
+
+test("watchdog drops the attempt when the tab no longer exists", async () => {
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        tabsGet: async () => { throw new Error("No tab with id"); }
+    });
+    const tabId = 6104;
+
+    startAttempt(bg2, tabId);
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+
+    assert.equal(bg2.getTabUpdateCalls().length, 0);
+    assert.equal(bg2.getActiveRedirects().has(tabId), false);
+});
+
+// Pressing Stop, or starting another navigation, aborts the load with
+// NS_BINDING_ABORTED. That is the user's action, not the instance failing.
+
+function trackedRequest(bg2, tabId, requestId) {
+    const origin = startAttempt(bg2, tabId);
+
+    bg2.followListener({ type: "main_frame", tabId, url: origin + "/jack", requestId });
+
+    return origin;
+}
+
+test("pressing Stop mid-load ends the attempt without demoting the instance or falling back", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6200;
+    const origin = trackedRequest(bg2, tabId, "req-1");
+
+    assert.equal(bg2.pendingTimerCount(), 1, "the watchdog is armed before the abort");
+
+    bg2.onErrorOccurred({ type: "main_frame", tabId, url: origin + "/jack", requestId: "req-1", error: "NS_BINDING_ABORTED" });
+    await bg2.advance(bg2.NAV_STREAM_TIMEOUT_MS);
+
+    assert.equal(bg2.getActiveRedirects().has(tabId), false);
+    assert.equal(bg2.pendingTimerCount(), 0, "no watchdog may survive to fire later");
+    assert.equal(bg2.getTabUpdateCalls().length, 0, "the tab must not be sent to another instance");
+    assert.equal(bg2.getLocalHealth()[origin], undefined, "an abort says nothing about the instance");
+});
+
+test("an abort from a superseded request does not end the attempt that replaced it", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6201;
+    const origin = trackedRequest(bg2, tabId, "req-2");
+
+    bg2.onErrorOccurred({ type: "main_frame", tabId, url: origin + "/jack", requestId: "req-1-stale", error: "NS_BINDING_ABORTED" });
+
+    assert.equal(bg2.getActiveRedirects().has(tabId), true, "the live attempt keeps being tracked");
+    assert.equal(bg2.pendingTimerCount(), 1, "and keeps its watchdog");
+});
+
+test("a genuine network failure demotes the instance as dead and falls back", () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 6202;
+    const origin = trackedRequest(bg2, tabId, "req-3");
+
+    bg2.onErrorOccurred({ type: "main_frame", tabId, url: origin + "/jack", requestId: "req-3", error: "NS_ERROR_UNKNOWN_HOST" });
+
+    assert.equal(bg2.getLocalHealth()[origin].state, "BROKEN");
+    assert.equal(bg2.getLocalHealth()[origin].kind, "dead");
+    assert.equal(bg2.getTabUpdateCalls().length, 1);
+    assert.ok(!bg2.getTabUpdateCalls()[0].url.startsWith(origin));
+});
+
 test("onResponseStarted re-arms the watchdog at the longer streaming timeout instead of treating a slow response as dead", async () => {
     const bg2 = load(undefined, undefined, undefined, { now: 0 });
     const tabId = 6001;
