@@ -64,16 +64,14 @@ The extension can use any instance currently reported healthy by the [health ser
 **Seed list** (`SEED_INSTANCES` in `background.js`):
 
 * `nitter.jaydenha.uk`
-* `nitter.click`
 * `nitter.meowing.monster`
 * `nitter.netbub.com`
-* `nitter.miningtcup.me`
 * `shitter.thepixora.com`
 * `nitter.xitter.cc`
 
 **Permitted superset** (`manifest.json`):
 
-The seed list plus `nitter.kareem.one`, which was dropped from the seed list in September 2026 after repeated 502s but stays permitted so it can return without a release if it recovers.
+The seed list plus `nitter.kareem.one`, `nitter.click`, and `nitter.miningtcup.me`. `nitter.kareem.one` was dropped from the seed list in September 2026 after repeated 502s; the other two were dropped in October 2026 because they no longer respond. All three stay permitted so they can return without a release if they recover.
 
 The health service can activate or deprioritise these domains between releases, but cannot introduce new domains. Hosts outside the manifest are discarded and re-checked at use time. Seed instances are never completely removed; unhealthy ones are simply pushed down the ranking.
 

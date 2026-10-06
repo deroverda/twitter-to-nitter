@@ -312,6 +312,20 @@ test("PERMITTED_ORIGINS is exactly the manifest's eight instance origins", () =>
     }
 });
 
+test("instances dropped from the seed list stay permitted, and return live once the service reports them healthy", () => {
+    const dropped = ["nitter.kareem.one", "nitter.click", "nitter.miningtcup.me"];
+    const seeds = [...bg.SEED_INSTANCES];
+
+    for (const domain of dropped) {
+        assert.ok(bg.PERMITTED_ORIGINS.has(`https://${domain}`), `${domain} must stay permitted`);
+        assert.ok(!seeds.includes(`https://${domain}`), `${domain} must not be seeded`);
+    }
+
+    const bg2 = load();
+    bg2.setStatus({ "nitter.click": { healthy: true } }, Date.now());
+    assert.ok(Array.from(bg2.candidateOrigins()).includes("https://nitter.click"));
+});
+
 test("candidateOrigins is the seed list until fresh status data adds to it", () => {
     const bg2 = load(statusOnlyManifest());
     const sorted = (x) => Array.from(x).sort();
@@ -811,14 +825,26 @@ test("onResponseStarted re-arms the watchdog at the longer streaming timeout ins
 });
 
 test("switchInstance bounds total fallback time by elapsed wall-clock time, not just instance count", async () => {
-    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    // The seed list alone is shorter than MAX_FALLBACK_MS / NAV_TIMEOUT_MS, so
+    // add status-promoted instances until the candidate count exceeds the
+    // time budget; otherwise running out of instances would end the attempt
+    // first and this would stop testing the wall-clock bound.
+    const extraHosts = Array.from({ length: 4 }, (_, i) => `nitter.extra${i}.example`);
+    const wideManifest = JSON.parse(JSON.stringify(manifest));
+    wideManifest.permissions.push(...extraHosts.map((host) => `https://${host}/*`));
+
+    const bg2 = load(wideManifest, undefined, undefined, { now: 0 });
+    bg2.setStatus(Object.fromEntries(extraHosts.map((host) => [host, { healthy: true }])), 0);
+    bg2.recomputeRanking();
+
+    const candidateCount = bg2.candidateOrigins().length;
     const tabId = 6002;
 
     bg2.interceptListener({ type: "main_frame", tabId, url: "https://x.com/jack" });
 
     let iterations = 0;
 
-    while (bg2.getActiveRedirects().has(tabId) && iterations < bg2.SEED_INSTANCES.length + 2) {
+    while (bg2.getActiveRedirects().has(tabId) && iterations < candidateCount + 2) {
         await bg2.advance(bg2.NAV_TIMEOUT_MS);
         iterations++;
     }
@@ -828,8 +854,8 @@ test("switchInstance bounds total fallback time by elapsed wall-clock time, not 
         "the attempt must end once MAX_FALLBACK_MS is exceeded, even with untried candidates left"
     );
     assert.ok(
-        iterations < bg2.SEED_INSTANCES.length,
-        "it must stop well before exhausting every seed instance by count"
+        iterations < candidateCount,
+        "it must stop well before exhausting every candidate by count"
     );
 
     const lastUpdate = bg2.getTabUpdateCalls().at(-1);

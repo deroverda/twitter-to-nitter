@@ -44,12 +44,17 @@ const STATUS_API = "https://status.d420.de/api/v1/instances";
 // dead instance costs a real fallback hop on a cold start, but leaving it
 // permitted means it returns on its own, with no release, if it recovers and
 // the service starts reporting it healthy again.
+//
+// nitter.click and nitter.miningtcup.me were dropped on 2026-10-06 and stay
+// permitted for the same reason. A dead seed keeps getting picked: an instance
+// with no status entry ranks as unknown, not unhealthy, and the seed list is
+// the floor whenever the service is unreachable. miningtcup.me resets the
+// connection and is absent from the service; click hangs until the watchdog
+// fires.
 const SEED_INSTANCES = [
   "https://nitter.jaydenha.uk",
-  "https://nitter.click",
   "https://nitter.meowing.monster",
   "https://nitter.netbub.com",
-  "https://nitter.miningtcup.me",
   "https://shitter.thepixora.com",
   "https://nitter.xitter.cc",
 ];
