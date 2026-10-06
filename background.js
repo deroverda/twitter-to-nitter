@@ -1311,8 +1311,9 @@ browser.webRequest.onResponseStarted.addListener(
 // silently defeated this entire terminal-failure path: the update() call
 // failed, its rejection was swallowed by the caller's .catch(() => {}), and
 // the user was left stranded on the last broken instance with no explanation
-// at all. Shown only when every configured instance has been tried and
-// failed for one navigation. No web_accessible_resources entry is needed:
+// at all. Shown when every configured instance has been tried and failed for
+// one navigation, or when the navigation ran out of time (MAX_FALLBACK_MS)
+// with candidates left. No web_accessible_resources entry is needed:
 // tabs.update() navigating to the extension's own page is a first-party
 // operation, not a web page referencing an extension resource.
 function terminalFailurePage(path) {

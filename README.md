@@ -168,7 +168,7 @@ There is no build step, framework, or bundled dependency.
 
 `check-page.js` is a separate file because some pages' CSP blocks inline script injection. It runs only on actively tracked navigations.
 
-`terminal-failure.html/js` is a packaged extension page used when every configured instance fails; Firefox's `tabs.update()` rejects `data:` URLs.
+`terminal-failure.html/js` is a packaged extension page shown when no instance works for a navigation; Firefox's `tabs.update()` rejects `data:` URLs.
 
 `popup.html/js` provides the toolbar popup for selecting a preferred instance.
 
