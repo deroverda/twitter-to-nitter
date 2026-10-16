@@ -11,7 +11,7 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Last Commit](https://img.shields.io/github/last-commit/deroverda/twitter-to-nitter)
 
-A tiny Firefox extension that redirects `x.com` and `twitter.com` to a working Nitter frontend.
+A tiny Firefox extension (desktop and Android) that redirects `x.com` and `twitter.com` to a working Nitter frontend.
 
 The X request is **intercepted before it leaves your browser**. X never receives the navigation or gets to load first.
 
@@ -94,7 +94,7 @@ Domains already in the permitted superset require no release to become active or
 
 ## Install
 
-Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically. Requires Firefox 142 or newer (desktop).
+Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically. Requires Firefox 142 or newer, on desktop or Android.
 
 ### Development install
 

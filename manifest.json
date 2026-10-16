@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Twitter/X to Nitter",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Redirect Twitter/X pages to a working Nitter frontend.",
   "icons": {
     "128": "icon.png"
@@ -45,6 +45,9 @@
       "data_collection_permissions": {
         "required": ["none"]
       }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
     }
   }
 }
