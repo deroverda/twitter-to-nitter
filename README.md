@@ -27,17 +27,12 @@ Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-
 
 ## What it does
 
-```mermaid
-flowchart TD
-    A["You click an X link"] --> B["The extension opens it on a Nitter instance instead"]
-    B --> C{"Does the page work?"}
-    C -->|Bot check| E["Stays on the bot check until it is solved"]
-    E -->|Solved| C
-    C -->|Yes| D["You read it on Nitter"]
-    C -->|No| F{"Another instance to try<br>within 45 seconds?"}
-    F -->|Yes| B
-    F -->|No| G["Error page, never X"]
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
+    <img src="assets/flow-diagram.svg" width="600" alt="Flowchart: you click an X link and the extension opens it on a Nitter instance instead. If the page works, you read it on Nitter. On a bot check it stays until the check is solved, then checks the page again. If the page does not work and another instance can be tried within 45 seconds, it opens the next one; otherwise it shows an error page, never X.">
+  </picture>
+</p>
 
 When you open an X/Twitter link:
 
