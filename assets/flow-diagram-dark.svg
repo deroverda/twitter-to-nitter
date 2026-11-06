@@ -1,69 +1,69 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 660" font-family="Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 650" role="img" aria-label="Flowchart: you click an X link; the extension opens it on a Nitter instance instead. If the page works you read it on Nitter. On a bot check it stays until the check is solved, then checks the page again. If the page does not work and another instance can be tried within 45 seconds, it opens the next one; otherwise it shows an error page, never X." font-family="Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#9198a1"/>
     </marker>
   </defs>
-
-  <rect x="0" y="0" width="720" height="660" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+  <rect x="0" y="0" width="800" height="650" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
 
   <!-- A: start -->
-  <rect x="210" y="20" width="280" height="70" rx="8" fill="#37474f" stroke="#57606a" stroke-width="1"/>
-  <text x="350" y="60" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">x.com/jack</text>
+  <rect x="270" y="20" width="260" height="50" rx="8" fill="#37474f" stroke="#57606a" stroke-width="1"/>
+  <text x="400" y="51" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">You click an X link</text>
 
-  <line x1="350" y1="90" x2="350" y2="118" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- A to B -->
+  <line x1="400" y1="70" x2="400" y2="98" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- B: try instance -->
-  <rect x="210" y="120" width="280" height="70" rx="8" fill="#2f6fc9"/>
-  <text x="350" y="152" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">Try a Nitter instance</text>
-  <text x="350" y="170" text-anchor="middle" fill="#ffffff" font-size="11">(preferred instance first try only)</text>
+  <!-- B: open on Nitter -->
+  <rect x="220" y="100" width="360" height="70" rx="8" fill="#2f6fc9"/>
+  <text x="400" y="131" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">The extension opens it on</text>
+  <text x="400" y="151" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">a Nitter instance instead</text>
 
-  <line x1="350" y1="190" x2="350" y2="213" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- B to C -->
+  <line x1="400" y1="170" x2="400" y2="198" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- C: decision diamond -->
-  <polygon points="350,215 520,290 350,365 180,290" fill="#d4a017"/>
-  <text x="350" y="272" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">Rate limited, blocked, unreachable,</text>
-  <text x="350" y="290" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">not a Nitter page, or</text>
-  <text x="350" y="308" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">feature disabled?</text>
+  <!-- C: does the page work -->
+  <polygon points="400,200 530,260 400,320 270,260" fill="#d4a017"/>
+  <text x="400" y="266" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">Does the page work?</text>
 
-  <!-- No -> Done (left) -->
-  <line x1="180" y1="290" x2="150" y2="393" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="135" y="345" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="bold">No</text>
+  <!-- C to E: bot check -->
+  <polyline points="270,260 140,260 140,358" fill="none" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="205" y="250" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Bot check</text>
 
-  <!-- Yes -> next decision (right) -->
-  <line x1="520" y1="290" x2="550" y2="395" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="565" y="345" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="bold">Yes</text>
+  <!-- E: bot check -->
+  <rect x="30" y="360" width="220" height="70" rx="8" fill="#4fa3ab"/>
+  <text x="140" y="391" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">Stays on the bot check</text>
+  <text x="140" y="411" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">until it is solved</text>
 
-  <!-- Done box (green) -->
-  <rect x="20" y="395" width="260" height="70" rx="8" fill="#3fb46f"/>
-  <text x="150" y="427" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">Success</text>
-  <text x="150" y="445" text-anchor="middle" fill="#0d1117" font-size="11">stay on this Nitter page</text>
+  <!-- E to C: solved -->
+  <polyline points="250,395 335,395 335,293" fill="none" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="327" y="345" text-anchor="end" fill="#e6edf3" font-size="16" font-weight="bold">Solved</text>
 
-  <!-- D: second decision diamond -->
-  <polygon points="550,395 665,455 550,515 435,455" fill="#d4a017"/>
-  <text x="550" y="450" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">Another instance left,</text>
-  <text x="550" y="468" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">and total time under ~45s?</text>
+  <!-- C to D: yes -->
+  <line x1="400" y1="320" x2="400" y2="468" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="410" y="430" text-anchor="start" fill="#e6edf3" font-size="16" font-weight="bold">Yes</text>
 
-  <!-- D Yes -> loop back to B -->
-  <polyline points="665,455 685,455 685,155 492,155" fill="none" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="691" y="300" fill="#e6edf3" font-size="13" font-weight="bold">Yes</text>
+  <!-- D: read on Nitter -->
+  <rect x="290" y="470" width="220" height="50" rx="8" fill="#3fb46f"/>
+  <text x="400" y="501" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">You read it on Nitter</text>
 
-  <!-- D No -> terminal page -->
-  <line x1="550" y1="515" x2="550" y2="558" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="580" y="540" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="bold">No</text>
+  <!-- C to F: no -->
+  <polyline points="530,260 640,260 640,328" fill="none" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="585" y="250" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">No</text>
 
-  <!-- Terminal failure page box (red) -->
-  <rect x="420" y="560" width="260" height="70" rx="8" fill="#d9534f"/>
-  <text x="550" y="594" text-anchor="middle" fill="#0d1117" font-size="15" font-weight="bold">Terminal failure page</text>
-  <text x="550" y="612" text-anchor="middle" fill="#0d1117" font-size="11">(retries exhausted or timed out; retry link shown)</text>
+  <!-- F: another instance -->
+  <polygon points="640,330 770,400 640,470 510,400" fill="#d4a017"/>
+  <text x="640" y="396" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">Another instance to try</text>
+  <text x="640" y="416" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">within 45 seconds?</text>
 
-  <!-- Bot check -> stay (down) -->
-  <line x1="350" y1="365" x2="350" y2="558" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="358" y="480" fill="#e6edf3" font-size="14" font-weight="bold">Bot check</text>
+  <!-- F to B: yes -->
+  <polyline points="770,400 785,400 785,135 582,135" fill="none" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="777" y="270" text-anchor="end" fill="#e6edf3" font-size="16" font-weight="bold">Yes</text>
 
-  <!-- Bot check box -->
-  <rect x="200" y="560" width="200" height="70" rx="8" fill="#4fa3ab"/>
-  <text x="300" y="590" text-anchor="middle" fill="#0d1117" font-size="15" font-weight="bold">Stay on the bot check</text>
-  <text x="300" y="608" text-anchor="middle" fill="#0d1117" font-size="11">(Cloudflare, Anubis, go-away)</text>
-  <text x="300" y="622" text-anchor="middle" fill="#0d1117" font-size="11">so it can finish</text>
+  <!-- F to G: no -->
+  <line x1="640" y1="470" x2="640" y2="568" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="652" y="525" text-anchor="start" fill="#e6edf3" font-size="16" font-weight="bold">No</text>
+
+  <!-- G: error page -->
+  <rect x="530" y="570" width="220" height="50" rx="8" fill="#d9534f"/>
+  <text x="640" y="601" text-anchor="middle" fill="#0d1117" font-size="16" font-weight="bold">Error page, never X</text>
 </svg>
