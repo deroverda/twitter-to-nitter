@@ -92,3 +92,20 @@ test("an operator's waiting-room page with no challenge markers is still an unkn
 test("RSS feed is not judged by markup", () => {
     assert.equal(classifyXML("rss-feed.xml"), false);
 });
+
+// Saved from nitter.tiekoetter.com/search on 2026-11-06: the operator's own
+// "Search disabled" notice inside Nitter's normal header.
+test("an instance's own 'feature disabled' notice is unsupported, not a working page", () => {
+    assert.equal(classifyHTML("search-disabled.html"), "unsupported");
+});
+
+test("a working Nitter page whose title quotes 'just a moment' is not a challenge", () => {
+    assert.equal(classifyHTML("working-page-just-a-moment-title.html"), false);
+});
+
+test("a page Nitter did not render, titled 'Just a moment', is still a challenge", () => {
+    const { document, HTMLElement } = parseHTML(
+        "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><p>Checking your browser</p></body></html>"
+    );
+    assert.equal(runCheck(document, HTMLElement), "challenge");
+});

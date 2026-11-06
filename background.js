@@ -31,9 +31,9 @@ const STATUS_API = "https://status.d420.de/api/v1/instances";
 // The live active list (see candidateOrigins) is this plus any status-service
 // instance currently reported healthy that the manifest also permits.
 //
-// Upstream Nitter resumed development in September 2026 after legal advice
-// (github.com/zedeus/nitter, "Nitter lives"), following X Corp's 2026-08-24
-// cease-and-desist. lightbrd.com stays out regardless of uptime: per
+// Upstream Nitter (github.com/zedeus/nitter) received X Corp's cease-and-desist
+// on 2026-08-24; its README update of 2026-10-10 says the maintainer is seeking
+// funding and legal help. lightbrd.com stays out regardless of uptime: per
 // github.com/zedeus/nitter/issues/1209 it doesn't proxy images/video/GIFs
 // (they connect directly to Twitter's CDN) and loads Microsoft Clarity
 // analytics -- a privacy leak this extension exists to avoid.
@@ -51,12 +51,21 @@ const STATUS_API = "https://status.d420.de/api/v1/instances";
 // the floor whenever the service is unreachable. miningtcup.me resets the
 // connection and is absent from the service; click hangs until the watchdog
 // fires.
+//
+// nitter.meowing.monster was dropped on 2026-11-06 and stays permitted: every
+// path answers 301 to nitter.mizuki.st, and the service no longer lists it.
+// nitter.mie.foundation and nitter.r4fo.com were added as seeds the same day
+// after serving profiles, search and tweets in a real browser.
+// nitter.tiekoetter.com (search disabled by its operator) and nitter.mizuki.st
+// (meowing.monster's redirect target, behind Anubis) are permitted only, so the
+// service can activate them while it reports them healthy.
 const SEED_INSTANCES = [
   "https://nitter.jaydenha.uk",
-  "https://nitter.meowing.monster",
   "https://nitter.netbub.com",
   "https://shitter.thepixora.com",
   "https://nitter.xitter.cc",
+  "https://nitter.mie.foundation",
+  "https://nitter.r4fo.com",
 ];
 
 // Every https origin the manifest grants host access to, minus the status
@@ -93,7 +102,8 @@ const PERMITTED_DOMAINS = new Set(
 
 // The status filter above is the only thing keeping the service inside the
 // manifest superset. Fail loudly if the shipped seed list ever drifts outside
-// what the manifest permits (CI checks this too, but not at runtime).
+// what the manifest permits (test/background.test.js checks this too, but not
+// at runtime).
 for (const seed of SEED_INSTANCES) {
   if (!PERMITTED_ORIGINS.has(seed)) {
     console.error(
@@ -179,6 +189,13 @@ const STATUS_RETRY_MS = 5 * 60 * 1000;
 const STATUS_BACKOFF_MS = 60 * 60 * 1000;
 const STATUS_STALE_MS = 6 * 60 * 60 * 1000;
 const STATUS_FETCH_TIMEOUT_MS = 8000;
+
+// The refresh timer fires every STATUS_REFRESH_MS, but statusFetchedAt is
+// stamped when the response arrives, a moment after the timer started the
+// request. Without this margin the next tick finds the data a few hundred
+// milliseconds short of STATUS_REFRESH_MS old, skips, and the service ends up
+// polled every 30 minutes instead of every 15.
+const STATUS_REFRESH_MARGIN_MS = 60 * 1000;
 
 // Defensive only: the service returns a small, fixed-shape instance list, so
 // this should never come close. Guards against a misconfigured or compromised
@@ -588,10 +605,13 @@ function parseStatus(payload) {
       continue;
     }
 
+    // Number.isFinite, not typeof: JSON can carry 1e999, which parses to
+    // Infinity, and a single non-finite value turns weightedPick's spread
+    // into NaN weights that send every fresh redirect to one instance.
     hosts[domain] = {
       healthy: host.healthy === true,
-      points: typeof host.points === "number" ? host.points : null,
-      ping: typeof host.ping_avg === "number" ? host.ping_avg : null,
+      points: Number.isFinite(host.points) ? host.points : null,
+      ping: Number.isFinite(host.ping_avg) ? host.ping_avg : null,
       isBadHost: host.is_bad_host === true,
     };
   }
@@ -654,7 +674,10 @@ async function refreshStatus() {
     return;
   }
 
-  if (statusHosts && now - statusFetchedAt < STATUS_REFRESH_MS) {
+  if (
+    statusHosts &&
+    now - statusFetchedAt < STATUS_REFRESH_MS - STATUS_REFRESH_MARGIN_MS
+  ) {
     return;
   }
 
@@ -1593,7 +1616,8 @@ function isHTMLResponse(headers) {
   return header.value.toLowerCase().startsWith("text/html");
 }
 
-// Returns check-page.js's raw verdict: false, "fail", or "unknown" -- see
+// Returns check-page.js's raw verdict: false, "challenge", "fail",
+// "unsupported", or "unknown" -- see
 // that file for what each means. Collapsed to false on any injection error
 // (e.g. a page that blocked the script outright).
 async function pageShowsFailure(tabId) {
@@ -1712,18 +1736,24 @@ browser.webRequest.onCompleted.addListener(
             if (noteTemplateMismatch(origin)) {
               recordLocal(origin, "BROKEN", "server");
             }
-          } else {
+          } else if (failure === "fail") {
             // check-page.js only returns "fail" on a named
             // rate-limit/auth-exhaustion phrase, which is an
             // alive-but-refusing instance, not a broken one.
             recordLocal(origin, "BROKEN", "busy");
           }
+          // "unsupported" (e.g. search disabled by the operator) records
+          // nothing: the instance still serves profiles and tweets, so
+          // demoting it would cost every other navigation a working
+          // instance. Only this navigation moves on.
 
           switchInstance(details.tabId, origin, freshRecord.attemptId, {
             reason:
               failure === "unknown"
                 ? "did not render as a Nitter page"
-                : "rendered a soft failure page",
+                : failure === "unsupported"
+                  ? "has this feature disabled"
+                  : "rendered a soft failure page",
           });
         }
 

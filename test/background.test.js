@@ -233,6 +233,45 @@ test("parseStatus keeps only permitted hosts, rejects junk", () => {
     assert.equal(bg.parseStatus({ hosts: [{ domain: "not.permitted.example", healthy: true }] }), null);
 });
 
+test("parseStatus drops non-finite scores, which JSON can carry as 1e999", () => {
+    const parsed = bg.parseStatus(JSON.parse(
+        '{"hosts":[{"domain":"nitter.kareem.one","healthy":true,"points":1e999,"ping_avg":-1e999}]}'
+    ));
+    assert.equal(parsed["nitter.kareem.one"].healthy, true);
+    assert.equal(parsed["nitter.kareem.one"].points, null);
+    assert.equal(parsed["nitter.kareem.one"].ping, null);
+});
+
+test("the 15-minute timer refetches status even though the last answer arrived just after its request started", async () => {
+    let calls = 0;
+    const seed = manifest.permissions.find((p) => /^https:\/\/nitter\./.test(p)).replace(/^https:\/\/|\/\*$/g, "");
+    const fetchOk = async () => {
+        calls++;
+        return {
+            status: 200,
+            headers: { get: () => null },
+            body: null,
+            json: async () => ({ hosts: [{ domain: seed, healthy: true }] })
+        };
+    };
+    const bg2 = load(undefined, fetchOk, undefined, { now: 0 });
+    for (let i = 0; i < 5; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    const hosts = { [seed]: { healthy: true, points: null, ping: null } };
+
+    // Answer stamped 300 ms after the previous timer tick started the request.
+    bg2.setStatus(hosts, -(15 * 60 * 1000 - 300));
+    calls = 0;
+    await bg2.refreshStatus();
+    assert.equal(calls, 1, "a timer tick 15 minutes after the last poll must fetch again");
+
+    bg2.setStatus(hosts, -(10 * 60 * 1000));
+    calls = 0;
+    await bg2.refreshStatus();
+    assert.equal(calls, 0, "data 10 minutes old is still fresh enough to skip");
+});
+
 test("parseStatus normalizes domain casing and a trailing dot", () => {
     const parsed = bg.parseStatus({
         hosts: [{ domain: "Nitter.Kareem.One.", healthy: true, points: 50 }]
@@ -303,9 +342,9 @@ test("X's own locale-prefixed policy pages stay on X", () => {
     assert.equal(bg.isRedirectablePath("/en/with_replies"), true);
 });
 
-test("PERMITTED_ORIGINS is exactly the manifest's eight instance origins", () => {
+test("PERMITTED_ORIGINS is exactly the manifest's twelve instance origins", () => {
     const origins = [...bg.PERMITTED_ORIGINS].sort();
-    assert.equal(origins.length, 8);
+    assert.equal(origins.length, 12);
     assert.ok(!origins.includes("https://status.d420.de"));
     for (const seed of bg.SEED_INSTANCES) {
         assert.ok(bg.PERMITTED_ORIGINS.has(seed), `${seed} must be permitted`);
@@ -313,7 +352,7 @@ test("PERMITTED_ORIGINS is exactly the manifest's eight instance origins", () =>
 });
 
 test("instances dropped from the seed list stay permitted, and return live once the service reports them healthy", () => {
-    const dropped = ["nitter.kareem.one", "nitter.click", "nitter.miningtcup.me"];
+    const dropped = ["nitter.kareem.one", "nitter.click", "nitter.miningtcup.me", "nitter.meowing.monster"];
     const seeds = [...bg.SEED_INSTANCES];
 
     for (const domain of dropped) {
@@ -1138,6 +1177,47 @@ test("a confirmed 'fail' verdict still demotes the instance fleet-wide", async (
     });
 
     assert.equal(bg2.getLocalHealth()[origin].state, "BROKEN");
+});
+
+test("an 'unsupported' verdict (feature disabled on the instance) falls back without demoting the instance", async () => {
+    const bg2 = load(undefined, undefined, undefined, {
+        now: 0,
+        executeScript: async () => ["unsupported"]
+    });
+    const tabId = 8200;
+    const origin = bg2.SEED_INSTANCES[0];
+
+    bg2.getActiveRedirects().set(tabId, {
+        path: "/search?f=tweets&q=nasa",
+        tried: [origin],
+        timer: null,
+        switching: false,
+        startedAt: 0,
+        currentOrigin: origin
+    });
+    bg2.setTab(origin + "/search?f=tweets&q=nasa", "complete");
+
+    await bg2.onCompleted({
+        type: "main_frame",
+        tabId,
+        url: origin + "/search?f=tweets&q=nasa",
+        requestId: undefined,
+        statusCode: 200,
+        responseHeaders: undefined
+    });
+
+    assert.equal(bg2.getLocalHealth()[origin], undefined, "search disabled must not demote an instance that still serves profiles");
+
+    // switchInstance runs un-awaited from onCompleted and awaits tabs.get
+    // before updating the tab; let it finish.
+    for (let i = 0; i < 5; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    const updates = bg2.getTabUpdateCalls();
+    assert.equal(updates.length, 1, "the navigation must move on to another instance");
+    assert.ok(!updates[0].url.startsWith(origin), "it must not reload the same instance");
+    assert.ok(updates[0].url.endsWith("/search?f=tweets&q=nasa"), "the search itself is kept");
 });
 
 // ============================================================

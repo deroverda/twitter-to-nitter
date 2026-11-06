@@ -5,16 +5,19 @@
 // which sends "default-src 'none'". A file-based content script isn't
 // subject to the page's CSP the same way an inline one is.
 //
-// Returns one of four values: false when the page is fine (a real page or a
+// Returns one of five values: false when the page is fine (a real page or a
 // "not found" result); "challenge" for an anti-bot interstitial that hasn't
 // resolved yet (Cloudflare, Anubis or go-away); "fail" for a confidently-identified instance failure (a named
-// rate-limit/auth phrase, in content or Nitter's own error panel); "unknown"
-// when the page merely doesn't look like Nitter's template at all. "unknown"
-// still triggers fallback for this navigation (the page isn't usable either
-// way), but the caller never treats it as a confirmed fleet-wide failure -- a
-// real Nitter template change would otherwise get every instance judged
-// broken at once. "challenge" never triggers fallback: the tab is left alone
-// so the user can complete it.
+// rate-limit/auth phrase, in content or Nitter's own error panel);
+// "unsupported" when the instance renders its own notice that the requested
+// feature (e.g. search) is disabled there; "unknown" when the page merely
+// doesn't look like Nitter's template at all. "unknown" and "unsupported"
+// still trigger fallback for this navigation (the page isn't usable either
+// way), but the caller never treats them as a confirmed fleet-wide failure --
+// a real Nitter template change would otherwise get every instance judged
+// broken at once, and an instance with search disabled still serves profiles
+// and tweets. "challenge" never triggers fallback: the tab is left alone so
+// the user can complete it.
 (() => {
     // "rate limit" (no "-ed") also matches "rate limit exceeded" and "rate
     // limiting", wordings "rate limited" alone missed. The gates below
@@ -22,6 +25,20 @@
     // scan) already carry the false-positive protection that justified the
     // narrower phrase, so broadening it here doesn't weaken either gate.
     const INSTANCE_FAILURE_PHRASES = ["rate limit", "no auth tokens", "too many requests"];
+
+    // Markers that only appear when Nitter itself rendered the page. Used by
+    // step 1 to gate the title fallback and by step 7 below.
+    //
+    // A "/css/style.css" link is deliberately not one of these markers:
+    // operators replacing
+    // the page body commonly leave Nitter's static asset paths in place, so
+    // the link survives on pages the template never rendered. Counting it
+    // makes a shutdown notice pass as a healthy page, which fires no
+    // fallback and leaves the user sitting on it.
+    const looksLikeNitter = Boolean(
+        document.querySelector('meta[property="og:site_name"][content="Nitter"]') ||
+        document.querySelector(".inner-nav")
+    );
 
     // 1. Anti-bot interstitial still resolving. This is transient -- it turns
     //    into a real Nitter page once the challenge passes -- so it is not a
@@ -32,7 +49,9 @@
     //    /cdn-cgi/challenge-platform and its interactive form is
     //    #challenge-form; the localized "just a moment" title is only a cheap
     //    secondary signal, not the primary gate (it is English-only and
-    //    Cloudflare translates it).
+    //    Cloudflare translates it). It counts only on a page Nitter did not
+    //    render: Nitter puts tweet text in the title, so a working tweet
+    //    page that quotes the phrase must not read as a challenge.
     //
     //    Anubis and go-away are the self-hosted equivalents several instances
     //    run. Both solve themselves in the browser within a second or two and
@@ -45,7 +64,7 @@
         document.querySelector("#challenge-form") ||
         document.querySelector("script#anubis_challenge") ||
         document.querySelector('[href*="/go-away/cmd/go-away/"], [src*="/go-away/cmd/go-away/"]') ||
-        (document.title || "").toLowerCase().includes("just a moment")
+        (!looksLikeNitter && (document.title || "").toLowerCase().includes("just a moment"))
     ) {
         return "challenge";
     }
@@ -90,21 +109,17 @@
         return INSTANCE_FAILURE_PHRASES.some(phrase => text.includes(phrase)) ? "fail" : false;
     }
 
-    // 6. Doesn't render as Nitter at all: an operator's own shutdown or
-    //    maintenance page, whatever its wording. Checking for the absence of
-    //    Nitter's own template markers catches these regardless of phrasing.
-    //
-    //    A "/css/style.css" link is deliberately not one of those markers,
-    //    even though the CI markup check still counts it: operators replacing
-    //    the page body commonly leave Nitter's static asset paths in place, so
-    //    the link survives on pages the template never rendered. Counting it
-    //    makes a shutdown notice pass as a healthy page, which fires no
-    //    fallback and leaves the user sitting on it. The two markers below
-    //    only appear when Nitter itself rendered the page.
-    const looksLikeNitter = Boolean(
-        document.querySelector('meta[property="og:site_name"][content="Nitter"]') ||
-        document.querySelector(".inner-nav")
-    );
+    // 6. The instance rendered its own "this feature is disabled on this
+    //    instance" notice (seen live 2026-11-06 on nitter.tiekoetter.com for
+    //    /search). It carries Nitter's normal header, so step 7 would pass it
+    //    as a working page and leave the user on it.
+    if (document.querySelector(".disabled-feature")) {
+        return "unsupported";
+    }
 
+    // 7. Doesn't render as Nitter at all: an operator's own shutdown or
+    //    maintenance page, whatever its wording. Checking for the absence of
+    //    Nitter's own template markers (see looksLikeNitter above) catches
+    //    these regardless of phrasing.
     return looksLikeNitter ? false : "unknown";
 })();

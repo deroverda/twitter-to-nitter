@@ -22,8 +22,9 @@
 
   <!-- C: decision diamond -->
   <polygon points="350,215 520,290 350,365 180,290" fill="#d4a017"/>
-  <text x="350" y="278" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="bold">Is the page rate limited, blocked,</text>
-  <text x="350" y="298" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="bold">unreachable, or not a real Nitter page?</text>
+  <text x="350" y="272" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">Rate limited, blocked, unreachable,</text>
+  <text x="350" y="290" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">not a Nitter page, or</text>
+  <text x="350" y="308" text-anchor="middle" fill="#1a1a1a" font-size="13" font-weight="bold">feature disabled?</text>
 
   <!-- No -> Done (left) -->
   <line x1="180" y1="290" x2="150" y2="393" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
@@ -55,4 +56,14 @@
   <rect x="420" y="560" width="260" height="70" rx="8" fill="#d9534f"/>
   <text x="550" y="594" text-anchor="middle" fill="#0d1117" font-size="15" font-weight="bold">Terminal failure page</text>
   <text x="550" y="612" text-anchor="middle" fill="#0d1117" font-size="11">(retries exhausted or timed out; retry link shown)</text>
+
+  <!-- Bot check -> stay (down) -->
+  <line x1="350" y1="365" x2="350" y2="558" stroke="#9198a1" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="358" y="480" fill="#e6edf3" font-size="14" font-weight="bold">Bot check</text>
+
+  <!-- Bot check box -->
+  <rect x="200" y="560" width="200" height="70" rx="8" fill="#4fa3ab"/>
+  <text x="300" y="590" text-anchor="middle" fill="#0d1117" font-size="15" font-weight="bold">Stay on the bot check</text>
+  <text x="300" y="608" text-anchor="middle" fill="#0d1117" font-size="11">(Cloudflare, Anubis, go-away)</text>
+  <text x="300" y="622" text-anchor="middle" fill="#0d1117" font-size="11">so it can finish</text>
 </svg>

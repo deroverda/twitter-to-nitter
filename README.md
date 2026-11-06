@@ -20,12 +20,16 @@ The X request is **intercepted before it leaves your browser**. X never receives
 > [!NOTE]
 > Since X Corp.'s cease-and-desist letters in August 2026, fewer public Nitter instances are running and they are less stable than before. To cope with this, the extension follows a [live instance health service](https://status.d420.de/) and falls back automatically; if every instance fails, it shows a failure page rather than sending you to X. See [Background](#background) for the full story.
 
+## Install
+
+Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically. Requires Firefox 142 or newer, on desktop or Android.
+
 ## What it does
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
-    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance, check whether it is rate limited, blocked, unreachable, or not a real Nitter page, then retry, stay, or show a failure page once retries run out">
+    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance; stay on a working page or a bot check; retry another instance if the page is rate limited, blocked, unreachable, not a real Nitter page, or has the feature disabled; show a failure page once retries run out">
   </picture>
 </p>
 
@@ -51,11 +55,11 @@ The extension also:
 * Leaves X-only surfaces such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, `/privacy`, and the rest of `/i/*` on X.
 * Treats a 404 as a valid Nitter response.
 * Remembers instances that failed for you and temporarily demotes them, for longer the worse the failure was and the more often it repeats. A rate limit clears in minutes; a host that stops resolving is held down far longer.
-* Temporarily stops redirecting a tab if it detects a redirect loop.
+* Pauses redirecting in a tab for 10 seconds after seven X links open in it within 10 seconds. This guards against redirect loops, but fast normal clicking in one tab can trigger it too.
 * Detects failures regardless of how you reached Nitter: the extension's redirect, search result, bookmark, typed URL, or link clicked while already browsing Nitter.
 * Detects HTTP 200 pages that are actually instance failures, including custom operator shutdown pages, rate-limit pages, exhausted auth tokens, and known Nitter instance-error panels. A normal "not found" page is not treated as a failure.
-* Never navigates away from a Cloudflare, Anubis, or go-away verification page, so you can finish solving it (Anubis and go-away usually solve themselves without any input from you). The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately. Anti-bot interstitials from other providers are not recognised and are treated as pages that failed to render.
-* Performs the page-content check only while the extension is actively deciding a tracked navigation, not during ordinary Nitter browsing.
+* Moves on to another instance when the page says the feature is disabled on that instance, such as search. The instance is not marked as failing, since its other pages still work.
+* Never navigates away from a Cloudflare, Anubis, or go-away verification page, so you can finish solving it (Anubis and go-away usually solve themselves without any input from you). The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately.
 
 ## Instances
 
@@ -64,45 +68,24 @@ The extension can use any instance currently reported healthy by the [health ser
 **Seed list** (`SEED_INSTANCES` in `background.js`):
 
 * `nitter.jaydenha.uk`
-* `nitter.meowing.monster`
 * `nitter.netbub.com`
 * `shitter.thepixora.com`
 * `nitter.xitter.cc`
+* `nitter.mie.foundation`
+* `nitter.r4fo.com`
 
 **Permitted superset** (`manifest.json`):
 
-The seed list plus `nitter.kareem.one`, `nitter.click`, and `nitter.miningtcup.me`. These three were dropped from the seed list after repeated failures but stay permitted, so the health service can bring them back without a release when they recover.
+The seed list plus:
+
+* `nitter.kareem.one`, `nitter.click`, `nitter.miningtcup.me` and `nitter.meowing.monster`. These were dropped from the seed list but stay permitted, so the health service can bring them back without a release when they recover. `nitter.meowing.monster` currently redirects every page to `nitter.mizuki.st`.
+* `nitter.tiekoetter.com` and `nitter.mizuki.st`. These are never seeded and are used only while the health service reports them healthy. `nitter.tiekoetter.com` has search disabled by its operator, so searches that land there move on to another instance.
 
 The health service can activate or deprioritise these domains between releases, but cannot introduce new domains. Hosts outside the manifest are discarded and re-checked at use time. Seed instances are never completely removed; unhealthy ones are simply pushed down the ranking.
 
 `lightbrd.com` is permanently excluded because it does not proxy images/video/GIFs and loads Microsoft Clarity analytics, according to [zedeus/nitter#1209](https://github.com/zedeus/nitter/issues/1209).
 
 If every reachable instance is unhealthy, the extension still redirects to the least-bad configured instance rather than X.
-
-### Maintaining a fork
-
-A fork needs its own add-on ID: change `browser_specific_settings.gecko.id` in `manifest.json` before signing, since the current ID belongs to the AMO listing.
-
-Adding a new domain requires:
-
-1. Add it to `SEED_INSTANCES` in `background.js`.
-2. Add its host permission to `manifest.json`.
-3. Bump the version.
-4. Sign and distribute a new `.xpi`.
-
-Domains already in the permitted superset require no release to become active or inactive.
-
-## Install
-
-Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-x-to-nitter/). Updates are delivered automatically. Requires Firefox 142 or newer, on desktop or Android.
-
-### Development install
-
-1. Open `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on**.
-3. Select `manifest.json`.
-
-Temporary installations are removed when Firefox restarts.
 
 ## Permissions and why they are needed
 
@@ -123,7 +106,7 @@ The X permission is necessary because blocking a request requires host permissio
 * **X normally never receives the navigation.** Exceptions:
 
   * X-only paths listed above intentionally remain on X.
-  * If a redirect loop is detected, interception is briefly disabled for that tab and the request can reach X.
+  * If seven X links open in one tab within 10 seconds (a redirect loop, or fast clicking), interception pauses in that tab for 10 seconds and X links opened there in that time reach X.
   * `t.co` links are not intercepted, so Twitter's URL shortener sees the click before the resulting X navigation is redirected.
 * **One Nitter instance receives each request at a time.** A failed instance may be followed sequentially by another permitted instance during the same navigation, never simultaneously and never outside the permitted superset.
 * **Operators see your IP address.** Each Nitter instance you land on is run by an independent operator who can see your IP address and which pages you open, as with any website. The [health service](https://status.d420.de/about) is also run by an operator its site does not name, and it can see your IP address and when you are online. The extension cannot hide either from them.
@@ -139,18 +122,39 @@ Some Nitter instances do not proxy media. On those instances, images and video l
 ## Known limitations
 
 * Nitter's **Open in X** link is intercepted too. Use a private window or disable the extension to deliberately open X.
-* The health service can only activate domains already permitted by `manifest.json`; new domains require a release.
 * Non-proxying Nitter instances load media from Twitter's CDN.
-* X-only paths listed under [What it does](#what-it-does) remain on X.
 * Pressing **Back** after a fallback can trigger the same fallback again because the browser reloads the page the extension switched away from.
 * A Cloudflare, Anubis, or go-away challenge that never resolves is a dead end for that navigation, for example Anubis with JavaScript blocked. The extension will not redirect away from one, because it cannot tell someone part-way through solving it from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised. Challenges from other providers are detected only as "this did not render as Nitter", so the extension falls back to the next instance instead of waiting for you to solve them.
 * Failure phrases such as `"rate limit"`, `"no auth tokens"`, and `"too many requests"` are recognised only in English. Structural checks can still detect pages that do not resemble Nitter.
 
 ## Background
 
-On 24 August 2026, X Corp. sent cease-and-desist letters demanding the takedown of Nitter instances and the upstream [Nitter project](https://github.com/zedeus/nitter), causing most public instances to shut down. In early September, after legal advice, the project announced it would continue ("Nitter lives") and instances began returning. The upstream repository was archived on 11 September 2026; individual Nitter-compatible instances remain separately operated.
+On 24 August 2026, X Corp. sent cease-and-desist letters demanding a permanent takedown of Nitter instances and the upstream [Nitter project](https://github.com/zedeus/nitter), causing most public instances to shut down. In an update on 10 October 2026, the Nitter maintainer wrote that they are seeking funding and legal help. Some public instances are running again, each operated independently of the project.
 
-## No runtime dependencies
+## Development
+
+### Development install
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on**.
+3. Select `manifest.json`.
+
+Temporary installations are removed when Firefox restarts.
+
+### Maintaining a fork
+
+A fork needs its own add-on ID: change `browser_specific_settings.gecko.id` in `manifest.json` before signing, since the current ID belongs to the AMO listing.
+
+Adding a new domain requires:
+
+1. Add it to `SEED_INSTANCES` in `background.js`.
+2. Add its host permission to `manifest.json`.
+3. Bump the version.
+4. Sign and distribute a new `.xpi`.
+
+Domains already in the permitted superset require no release to become active or inactive.
+
+### Files in the extension
 
 The extension ships only:
 
@@ -162,6 +166,7 @@ The extension ships only:
 * `popup.html`
 * `popup.js`
 * `icon.png`
+* `LICENSE`
 
 There is no build step, framework, or bundled dependency.
 
