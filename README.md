@@ -1,3 +1,4 @@
+
 <div align="center">
 
 <img src="logo.png" width="512" alt="Twitter/X to Nitter">
@@ -26,12 +27,17 @@ Install from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/twitter-
 
 ## What it does
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/flow-diagram-dark.svg">
-    <img src="assets/flow-diagram.svg" width="600" alt="Redirect flow: try an instance; stay on a working page or a bot check; retry another instance if the page is rate limited, blocked, unreachable, not a real Nitter page, or has the feature disabled; show a failure page once retries run out">
-  </picture>
-</p>
+```mermaid
+flowchart TD
+    A["You click an X link"] --> B["The extension opens it on a Nitter instance instead"]
+    B --> C{"Does the page work?"}
+    C -->|Bot check| E["Stays on the bot check until it is solved"]
+    E -->|Solved| C
+    C -->|Yes| D["You read it on Nitter"]
+    C -->|No| F{"Another instance to try<br>within 45 seconds?"}
+    F -->|Yes| B
+    F -->|No| G["Error page, never X"]
+```
 
 When you open an X/Twitter link:
 
