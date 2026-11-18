@@ -109,3 +109,15 @@ test("a page Nitter did not render, titled 'Just a moment', is still a challenge
     );
     assert.equal(runCheck(document, HTMLElement), "challenge");
 });
+
+test("Gandalf bot-check page reports as a challenge, not an unknown template", () => {
+    assert.equal(classifyHTML("gandalf-challenge.html"), "challenge");
+});
+
+test("dogcaptcha picture puzzle reports as a puzzle that needs a click", () => {
+    assert.equal(classifyHTML("dogcaptcha-puzzle.html"), "puzzle");
+});
+
+test("'Quick check' button puzzle reports as a puzzle that needs a click", () => {
+    assert.equal(classifyHTML("shield-quick-check.html"), "puzzle");
+});

@@ -45,20 +45,24 @@ const STATUS_API = "https://status.d420.de/api/v1/instances";
 // permitted means it returns on its own, with no release, if it recovers and
 // the service starts reporting it healthy again.
 //
-// nitter.click and nitter.miningtcup.me were dropped on 2026-10-06 and stay
-// permitted for the same reason. A dead seed keeps getting picked: an instance
-// with no status entry ranks as unknown, not unhealthy, and the seed list is
-// the floor whenever the service is unreachable. miningtcup.me resets the
-// connection and is absent from the service; click hangs until the watchdog
-// fires.
+// nitter.click was dropped on 2026-10-06 and stays permitted for the same
+// reason. A dead seed keeps getting picked: an instance with no status entry
+// ranks as unknown, not unhealthy, and the seed list is the floor whenever the
+// service is unreachable.
 //
-// nitter.meowing.monster was dropped on 2026-11-06 and stays permitted: every
-// path answers 301 to nitter.mizuki.st, and the service no longer lists it.
-// nitter.mie.foundation and nitter.r4fo.com were added as seeds the same day
+// nitter.mie.foundation and nitter.r4fo.com were added as seeds on 2026-11-06
 // after serving profiles, search and tweets in a real browser.
-// nitter.tiekoetter.com (search disabled by its operator) and nitter.mizuki.st
-// (meowing.monster's redirect target, behind Anubis) are permitted only, so the
-// service can activate them while it reports them healthy.
+// nitter.tiekoetter.com (search disabled by its operator) is permitted only,
+// so the service can activate it while it reports it healthy.
+//
+// On 2026-11-18 three domains left the manifest: nitter.mizuki.st now answers
+// every path with a 301 to ruf.st (same operator), nitter.meowing.monster
+// redirects into that chain, and nitter.miningtcup.me had been gone from the
+// service for weeks. A redirect to a domain outside the manifest leaves the
+// tab untracked, so fallback can't help there. ruf.st, nitter.catsarch.com and
+// nitter.privacyredirect.com were added as permitted only after profile,
+// search and tweet pages loaded in a real browser; the service doesn't list
+// ruf.st yet, so it stays inactive until it does.
 const SEED_INSTANCES = [
   "https://nitter.jaydenha.uk",
   "https://nitter.netbub.com",
@@ -262,6 +266,17 @@ const NAV_STREAM_TIMEOUT_MS = 20000;
 // minutes. Once elapsed time since the navigation started exceeds this, the
 // terminal failure page is shown even if untried candidates remain.
 const MAX_FALLBACK_MS = 45000;
+
+// How long a page that doesn't look like Nitter is given before fallback. Bot
+// checks keep appearing that check-page.js doesn't know yet (three new ones in
+// November 2026), and the ones that pass on their own reload the real page
+// within a few seconds; Gandalf's takes two.
+const UNKNOWN_GRACE_MS = 5000;
+
+// How long the tried list of an attempt that stopped at a bot check is kept
+// for that tab. Long enough to solve a picture test, short enough that a tab
+// the user has moved on from doesn't carry the list into an unrelated visit.
+const PARKED_TTL_MS = 5 * 60 * 1000;
 
 // Circuit breaker against pathological redirect loops. The only realistic
 // live trigger is rapid *legitimate* X clicks (noteRedirect counts every new
@@ -1101,6 +1116,12 @@ function noteRedirect(tabId) {
 
 const activeRedirects = new Map();
 
+// Attempts that stopped at a bot check, by tab: { origin, tried, startedAt,
+// parkedAt }. Once the check passes the instance loads the page again, and the
+// attempt resumes from here instead of starting over with an empty tried list,
+// which made fallback cycle through the same failing instances.
+const parkedRedirects = new Map();
+
 // A record is a mutable object reused across multiple browser requests to
 // the same tab (self-redirects, hops between instances), so record identity
 // and origin alone can't tell a stale async callback apart from the attempt
@@ -1123,6 +1144,8 @@ browser.webRequest.onBeforeRequest.addListener(
     if (details.tabId < 0) {
       return {};
     }
+
+    parkedRedirects.delete(details.tabId);
 
     let url;
 
@@ -1375,7 +1398,7 @@ async function switchInstance(
   tabId,
   origin,
   attemptId,
-  { skipCommittedCheck = false, reason = "failed" } = {},
+  { skipCommittedCheck = false, reason = "failed", stayIfNoNext = false } = {},
 ) {
   const record = activeRedirects.get(tabId);
 
@@ -1477,6 +1500,15 @@ async function switchInstance(
   const outOfTime = Date.now() - record.startedAt >= MAX_FALLBACK_MS;
   const next = outOfTime ? null : pickInstance(record.tried);
 
+  if (!next && stayIfNoNext) {
+    // A puzzle the user can still solve is better than the failure page.
+    console.log(
+      `[Twitter → Nitter] ${origin} ${reason}; no other instance left, leaving it to solve.`,
+    );
+    activeRedirects.delete(tabId);
+    return;
+  }
+
   if (!next) {
     // Either every configured instance has been tried for this
     // navigation, or it has been running long enough that trying more
@@ -1559,13 +1591,21 @@ browser.webRequest.onBeforeRequest.addListener(
       return;
     }
 
+    const parked = parkedRedirects.get(details.tabId);
+    parkedRedirects.delete(details.tabId);
+    const now = Date.now();
+    const resumes =
+      parked && parked.origin === origin && now - parked.parkedAt < PARKED_TTL_MS;
+
+    // Resuming after a bot check keeps the tried list, and the time spent on
+    // the check doesn't count against MAX_FALLBACK_MS.
     activeRedirects.set(details.tabId, {
       path: url.pathname + url.search,
-      tried: [origin],
+      tried: resumes ? parked.tried : [origin],
       timer: null,
       switching: false,
       requestId: details.requestId,
-      startedAt: Date.now(),
+      startedAt: resumes ? parked.startedAt + (now - parked.parkedAt) : now,
     });
     armWatchdog(details.tabId, origin);
   },
@@ -1616,7 +1656,7 @@ function isHTMLResponse(headers) {
   return header.value.toLowerCase().startsWith("text/html");
 }
 
-// Returns check-page.js's raw verdict: false, "challenge", "fail",
+// Returns check-page.js's raw verdict: false, "challenge", "puzzle", "fail",
 // "unsupported", or "unknown" -- see
 // that file for what each means. Collapsed to false on any injection error
 // (e.g. a page that blocked the script outright).
@@ -1630,6 +1670,116 @@ async function pageShowsFailure(tabId) {
   } catch {
     return false;
   }
+}
+
+// Acts on check-page.js's verdict for the page an attempt loaded. graceOver
+// marks the second look at a page that first came back "unknown".
+async function actOnVerdict(details, origin, failure, graceOver) {
+  const { tabId, requestId } = details;
+
+  // The user chose to keep this instance, so a puzzle there is theirs to
+  // solve, like any other bot check.
+  if (failure === "puzzle" && origin === preferredInstance) {
+    failure = "challenge";
+  }
+
+  // An anti-bot interstitial, not a page the instance served us. Never
+  // redirect away from it: the user may be part-way through solving it, and
+  // there is no way from here to tell someone working on a CAPTCHA apart from
+  // a challenge that will never clear. Park the attempt and leave the tab
+  // alone -- but demote the instance briefly so the *next* fresh redirect
+  // prefers one that isn't challenging this user. Solving it loads a real
+  // page, whose recordLocal(OK) clears the demotion again straight away.
+  if (failure === "challenge") {
+    recordLocal(origin, "BROKEN", "busy");
+
+    const record = activeRedirects.get(tabId);
+
+    if (sameAttempt(record, origin, requestId)) {
+      parkedRedirects.set(tabId, {
+        origin,
+        tried: record.tried,
+        startedAt: record.startedAt,
+        parkedAt: Date.now(),
+      });
+      activeRedirects.delete(tabId);
+    }
+
+    return;
+  }
+
+  if (!failure) {
+    recordLocal(origin, "OK");
+
+    if (sameAttempt(activeRedirects.get(tabId), origin, requestId)) {
+      activeRedirects.delete(tabId);
+    }
+
+    return;
+  }
+
+  // executeScript is async: the tab may have navigated during it, in which
+  // case check-page.js ran against a different document and its verdict is
+  // not about this instance. Re-fetch and re-confirm before acting on it.
+  const freshRecord = activeRedirects.get(tabId);
+
+  if (!sameAttempt(freshRecord, origin, requestId)) {
+    return;
+  }
+
+  // A bot check check-page.js doesn't know yet reads as "unknown". If it
+  // passes on its own, the real page loads as a new request and replaces
+  // this attempt before the timer fires.
+  if (failure === "unknown" && !graceOver) {
+    const attemptId = freshRecord.attemptId;
+
+    setTimeout(async () => {
+      const record = activeRedirects.get(tabId);
+
+      if (
+        !sameAttempt(record, origin, requestId) ||
+        record.attemptId !== attemptId
+      ) {
+        return;
+      }
+
+      await actOnVerdict(details, origin, await pageShowsFailure(tabId), true);
+    }, UNKNOWN_GRACE_MS);
+
+    return;
+  }
+
+  if (failure === "unknown") {
+    // Doesn't look like Nitter at all, but not confidently -- could be a
+    // genuine operator shutdown page, or could be check-page.js's own
+    // template markers going stale. Fall back for this navigation either
+    // way. A single mismatch never demotes; only an instance that keeps
+    // mismatching on its own does, which is what separates a broken
+    // instance from a template change.
+    if (noteTemplateMismatch(origin)) {
+      recordLocal(origin, "BROKEN", "server");
+    }
+  } else if (failure === "fail" || failure === "puzzle") {
+    // "fail" is only returned on a named rate-limit/auth-exhaustion phrase,
+    // an alive-but-refusing instance, not a broken one. A puzzle is a
+    // working instance this user would have to click through, so the next
+    // fresh redirect briefly prefers another.
+    recordLocal(origin, "BROKEN", "busy");
+  }
+  // "unsupported" (e.g. search disabled by the operator) records nothing:
+  // the instance still serves profiles and tweets, so demoting it would cost
+  // every other navigation a working instance. Only this navigation moves on.
+
+  const reasons = {
+    unknown: "did not render as a Nitter page",
+    unsupported: "has this feature disabled",
+    puzzle: "shows a bot check that needs a click",
+  };
+
+  switchInstance(tabId, origin, freshRecord.attemptId, {
+    reason: reasons[failure] || "rendered a soft failure page",
+    stayIfNoNext: failure === "puzzle",
+  });
 }
 
 browser.webRequest.onCompleted.addListener(
@@ -1657,9 +1807,20 @@ browser.webRequest.onCompleted.addListener(
       clearWatchdog(details.tabId);
     }
 
+    // Some bot checks arrive as an HTML 403 or 429 with nothing in the
+    // headers to tell them from a real refusal ("Quick check" sends 403,
+    // nitter.catsarch.com's Anubis sends 429). Look at the page before
+    // calling it a failure.
+    const pageCheckFirst =
+      isCurrent &&
+      (details.statusCode === 403 || details.statusCode === 429) &&
+      isHTMLResponse(details.responseHeaders) &&
+      !isCloudflareChallenge(details.statusCode, details.responseHeaders);
+
     if (
       isHardFailure(details.statusCode) &&
-      !isCloudflareChallenge(details.statusCode, details.responseHeaders)
+      !isCloudflareChallenge(details.statusCode, details.responseHeaders) &&
+      !pageCheckFirst
     ) {
       // 429/408 mean the instance answered and is alive, just refusing
       // this request right now; everything else in isHardFailure (auth,
@@ -1693,72 +1854,27 @@ browser.webRequest.onCompleted.addListener(
     if (isCurrent && isHTMLResponse(details.responseHeaders)) {
       const failure = await pageShowsFailure(details.tabId);
 
-      // An anti-bot interstitial, not a page the instance served us.
-      // Never redirect away from it: the user may be part-way through
-      // solving it, and there is no way from here to tell someone
-      // working on a CAPTCHA apart from a challenge that will never
-      // clear. End the attempt and leave the tab alone -- but demote
-      // the instance briefly so the *next* fresh redirect prefers one
-      // that isn't challenging this user. Solving it loads a real page,
-      // whose recordLocal(OK) clears the demotion again straight away.
-      if (failure === "challenge") {
-        recordLocal(origin, "BROKEN", "busy");
+      if (pageCheckFirst && failure !== "challenge" && failure !== "puzzle") {
+        recordLocal(
+          origin,
+          "BROKEN",
+          details.statusCode === 429 ? "busy" : "server",
+        );
 
-        if (
-          sameAttempt(
-            activeRedirects.get(details.tabId),
-            origin,
-            details.requestId,
-          )
-        ) {
-          activeRedirects.delete(details.tabId);
-        }
-
-        return;
-      }
-
-      if (failure) {
-        // executeScript above is async: the tab may have navigated
-        // during it, in which case check-page.js ran against a
-        // different document and its verdict is not about this
-        // instance. Re-fetch and re-confirm before acting on it.
         const freshRecord = activeRedirects.get(details.tabId);
 
         if (sameAttempt(freshRecord, origin, details.requestId)) {
-          if (failure === "unknown") {
-            // Doesn't look like Nitter at all, but not confidently
-            // -- could be a genuine operator shutdown page, or
-            // could be check-page.js's own template markers going
-            // stale. Fall back for this navigation either way. A
-            // single mismatch never demotes; only an instance that
-            // keeps mismatching on its own does, which is what
-            // separates a broken instance from a template change.
-            if (noteTemplateMismatch(origin)) {
-              recordLocal(origin, "BROKEN", "server");
-            }
-          } else if (failure === "fail") {
-            // check-page.js only returns "fail" on a named
-            // rate-limit/auth-exhaustion phrase, which is an
-            // alive-but-refusing instance, not a broken one.
-            recordLocal(origin, "BROKEN", "busy");
-          }
-          // "unsupported" (e.g. search disabled by the operator) records
-          // nothing: the instance still serves profiles and tweets, so
-          // demoting it would cost every other navigation a working
-          // instance. Only this navigation moves on.
-
           switchInstance(details.tabId, origin, freshRecord.attemptId, {
-            reason:
-              failure === "unknown"
-                ? "did not render as a Nitter page"
-                : failure === "unsupported"
-                  ? "has this feature disabled"
-                  : "rendered a soft failure page",
+            skipCommittedCheck: true,
+            reason: `returned HTTP ${details.statusCode}`,
           });
         }
 
         return;
       }
+
+      await actOnVerdict(details, origin, failure, false);
+      return;
     }
 
     recordLocal(origin, "OK");
@@ -1831,5 +1947,6 @@ browser.webRequest.onErrorOccurred.addListener(
 browser.tabs.onRemoved.addListener((tabId) => {
   clearWatchdog(tabId);
   activeRedirects.delete(tabId);
+  parkedRedirects.delete(tabId);
   loopGuard.delete(tabId);
 });

@@ -53,14 +53,16 @@ The extension also:
 
 * Preserves the original path and query string, minus X's share-tracking parameters (`s`, `t`, `ref_src`, `ref_url`). Nitter ignores them, so forwarding them would only pass X's tracking token to the instance operator.
 * Redirects canonical status URLs including `/i/status/<id>` and `/i/web/status/<id>`.
-* Leaves X-only surfaces such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, `/privacy`, and the rest of `/i/*` on X.
+* Leaves X-only surfaces such as `/home`, `/notifications`, `/messages`, `/settings`, `/explore`, `/compose`, `/intent`, `/share`, `/login`, `/logout`, `/account`, `/tos`, `/privacy`, and the rest of `/i/*` on X. When you are logged out, X itself sends `/home` on to `x.com/`, and that front page is redirected to Nitter like any other.
 * Treats a 404 as a valid Nitter response.
 * Remembers instances that failed for you and temporarily demotes them, for longer the worse the failure was and the more often it repeats. A rate limit clears in minutes; a host that stops resolving is held down far longer.
 * Pauses redirecting in a tab for 10 seconds after seven X links open in it within 10 seconds. This guards against redirect loops, but fast normal clicking in one tab can trigger it too.
 * Detects failures regardless of how you reached Nitter: the extension's redirect, search result, bookmark, typed URL, or link clicked while already browsing Nitter.
 * Detects HTTP 200 pages that are actually instance failures, including custom operator shutdown pages, rate-limit pages, exhausted auth tokens, and known Nitter instance-error panels. A normal "not found" page is not treated as a failure.
 * Moves on to another instance when the page says the feature is disabled on that instance, such as search. The instance is not marked as failing, since its other pages still work.
-* Never navigates away from a Cloudflare, Anubis, or go-away verification page, so you can finish solving it (Anubis and go-away usually solve themselves without any input from you). The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately.
+* Never navigates away from a Cloudflare, Anubis, go-away, or Gandalf verification page, so you can finish solving it (Anubis, go-away and Gandalf usually solve themselves without any input from you). The instance is briefly deprioritised so the next fresh redirect prefers one that is not challenging you; completing the challenge clears that immediately. Once it passes, fallback carries on from where it stopped and does not retry instances that already failed.
+* Moves on from a bot check that only a click can pass, such as a picture puzzle, when another instance is left to try. If none is, or it is the instance you chose to keep with the toolbar button, it stays so you can solve it.
+* Gives a page that does not look like Nitter 5 seconds before falling back, so a verification page the extension does not recognise yet can still finish on its own.
 
 ## Instances
 
@@ -79,8 +81,8 @@ The extension can use any instance currently reported healthy by the [health ser
 
 The seed list plus:
 
-* `nitter.kareem.one`, `nitter.click`, `nitter.miningtcup.me` and `nitter.meowing.monster`. These were dropped from the seed list but stay permitted, so the health service can bring them back without a release when they recover. `nitter.meowing.monster` currently redirects every page to `nitter.mizuki.st`.
-* `nitter.tiekoetter.com` and `nitter.mizuki.st`. These are never seeded and are used only while the health service reports them healthy. `nitter.tiekoetter.com` has search disabled by its operator, so searches that land there move on to another instance.
+* `nitter.kareem.one` and `nitter.click`. These were dropped from the seed list but stay permitted, so the health service can bring them back without a release when they recover.
+* `nitter.tiekoetter.com`, `nitter.catsarch.com`, `nitter.privacyredirect.com` and `ruf.st`. These are never seeded and are used only while the health service reports them healthy. `nitter.tiekoetter.com` has search disabled by its operator, so searches that land there move on to another instance. `ruf.st` is the new address of `nitter.mizuki.st` and is not listed by the health service yet.
 
 The health service can activate or deprioritise these domains between releases, but cannot introduce new domains. Hosts outside the manifest are discarded and re-checked at use time. Seed instances are never completely removed; unhealthy ones are simply pushed down the ranking.
 
@@ -118,14 +120,15 @@ The X permission is necessary because blocking a request requires host permissio
 
 ### Media privacy
 
-Some Nitter instances do not proxy media. On those instances, images and video load directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), so Twitter-owned infrastructure can see which profile/media was requested. Media proxying is controlled by the instance operator. Prefer a proxying instance or run your own if this matters.
+Many Nitter instances do not proxy media. On those instances, images and video load directly from Twitter's CDN (`pbs.twimg.com`, `video.twimg.com`), so Twitter-owned infrastructure can see your IP address and which profile/media was requested. Several instances run the shitter fork, which loads media directly unless the operator turns proxying on; some instances let you turn it on in their own preferences, but that setting does not follow you when the extension switches instance. Of the instances checked in November 2026, `nitter.catsarch.com` and `nitter.privacyredirect.com` proxied images. Use the toolbar button to prefer a proxying instance, or run your own if this matters.
 
 ## Known limitations
 
 * Nitter's **Open in X** link is intercepted too. Use a private window or disable the extension to deliberately open X.
 * Non-proxying Nitter instances load media from Twitter's CDN.
 * Pressing **Back** after a fallback can trigger the same fallback again because the browser reloads the page the extension switched away from.
-* A Cloudflare, Anubis, or go-away challenge that never resolves is a dead end for that navigation, for example Anubis with JavaScript blocked. The extension will not redirect away from one, because it cannot tell someone part-way through solving it from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised. Challenges from other providers are detected only as "this did not render as Nitter", so the extension falls back to the next instance instead of waiting for you to solve them.
+* A Cloudflare, Anubis, go-away, or Gandalf challenge that never resolves is a dead end for that navigation, for example Anubis with JavaScript blocked. The extension will not redirect away from one, because it cannot tell someone part-way through solving it from a challenge that is stuck. Opening the X link again picks a different instance, since the challenging one is briefly deprioritised. Challenges from other providers are detected only as "this did not render as Nitter": if they do not finish within 5 seconds, the extension falls back to the next instance instead of waiting for you to solve them.
+* If an instance redirects to a domain outside the permitted superset, the extension stops tracking that tab, so fallback cannot help if that page fails.
 * Failure phrases such as `"rate limit"`, `"no auth tokens"`, and `"too many requests"` are recognised only in English. Structural checks can still detect pages that do not resemble Nitter.
 
 ## Background

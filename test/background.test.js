@@ -183,6 +183,9 @@ function load(manifestOverride, fetchOverride, randomOverride, options = {}) {
 
 const bg = load();
 
+// Matches UNKNOWN_GRACE_MS in background.js.
+const UNKNOWN_GRACE = 5000;
+
 test("originOf accepts permitted origins, rejects everything else", () => {
     assert.equal(bg.originOf("https://nitter.kareem.one/jack"), "https://nitter.kareem.one");
     assert.equal(bg.originOf("https://nitter.kareem.one/i/status/20?x=1"), "https://nitter.kareem.one");
@@ -352,7 +355,7 @@ test("PERMITTED_ORIGINS is exactly the manifest's twelve instance origins", () =
 });
 
 test("instances dropped from the seed list stay permitted, and return live once the service reports them healthy", () => {
-    const dropped = ["nitter.kareem.one", "nitter.click", "nitter.miningtcup.me", "nitter.meowing.monster"];
+    const dropped = ["nitter.kareem.one", "nitter.click"];
     const seeds = [...bg.SEED_INSTANCES];
 
     for (const domain of dropped) {
@@ -830,6 +833,7 @@ test("one instance that keeps failing the template check is demoted; a single mi
         bg2.setTab(origin + "/jack", "complete");
         bg2.followListener({ type: "main_frame", tabId: 1, requestId, url: origin + "/jack" });
         await bg2.onCompleted({ type: "main_frame", tabId: 1, requestId, url: origin + "/jack", statusCode: 200, responseHeaders: html });
+        await bg2.advance(UNKNOWN_GRACE);
     };
 
     await visit("r1");
@@ -864,6 +868,7 @@ test("a fleet-wide template change never cascades into demoting the fleet", asyn
                 bg2.setTab(origin + "/jack", "complete");
                 bg2.followListener({ type: "main_frame", tabId: 1, requestId: "r" + request, url: origin + "/jack" });
                 await bg2.onCompleted({ type: "main_frame", tabId: 1, requestId: "r" + request, url: origin + "/jack", statusCode: 200, responseHeaders: html });
+                await bg2.advance(UNKNOWN_GRACE);
             }
         }
 
@@ -1134,6 +1139,7 @@ test("an 'unknown' page-template verdict falls back without demoting the instanc
             statusCode: 200,
             responseHeaders: undefined
         });
+        await bg2.advance(UNKNOWN_GRACE);
 
         assert.equal(
             bg2.getLocalHealth()[origin],
@@ -1426,7 +1432,7 @@ test("a preferred instance the fresh status data omits is still honored", async 
 
     await bg2.sendMessage({ type: "setPreferred", origin: preferred });
     bg2.setStatus({
-        "nitter.meowing.monster": { healthy: true, points: 50, ping: 500 },
+        "nitter.kareem.one": { healthy: true, points: 50, ping: 500 },
         "nitter.netbub.com": { healthy: true, points: 50, ping: 500 }
     }, Date.now());
     bg2.recomputeRanking();
@@ -1520,4 +1526,162 @@ test("readBoundedJSON falls back to response.json() when no streaming body reade
         bg.STATUS_MAX_BODY_BYTES
     );
     assert.deepEqual(parsed, { hosts: [] });
+});
+
+// ============================================================
+// Bot checks and puzzles (live findings, 2026-11-18)
+// ============================================================
+
+const HTML_HEADERS = [{ name: "Content-Type", value: "text/html" }];
+
+async function flushSwitch() {
+    for (let i = 0; i < 5; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+}
+
+test("a bot check that clears does not make fallback retry instances it already tried", async () => {
+    let verdict = false;
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => [verdict] });
+    const tabId = 9500;
+    const path = "/search?q=nasa";
+    const [first, second] = bg2.getRanked();
+
+    // The top-ranked instance never answers, so the watchdog moves on.
+    bg2.followListener({ type: "main_frame", tabId, requestId: "r1", url: first + path });
+    bg2.setTab(undefined, "loading");
+    await bg2.advance(bg2.NAV_TIMEOUT_MS);
+    await flushSwitch();
+    assert.equal(bg2.getTabUpdateCalls().at(-1).url, second + path);
+
+    // The next one shows a bot check, which the tab is left alone to solve.
+    verdict = "challenge";
+    bg2.followListener({ type: "main_frame", tabId, requestId: "r2", url: second + path });
+    bg2.setTab(second + path, "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, requestId: "r2", url: second + path, statusCode: 200, responseHeaders: HTML_HEADERS });
+
+    // It clears and loads the real page, which has search disabled.
+    verdict = "unsupported";
+    bg2.followListener({ type: "main_frame", tabId, requestId: "r3", url: second + path });
+    await bg2.onCompleted({ type: "main_frame", tabId, requestId: "r3", url: second + path, statusCode: 200, responseHeaders: HTML_HEADERS });
+    await flushSwitch();
+
+    const updates = bg2.getTabUpdateCalls();
+    assert.equal(updates.length, 2);
+    const next = new URL(updates[1].url).origin;
+    assert.notEqual(next, first, "the instance that already timed out must not be tried again");
+    assert.notEqual(next, second);
+});
+
+test("a click-to-solve puzzle served as HTTP 403 moves on without marking the instance broken", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => ["puzzle"] });
+    const tabId = 9501;
+    const origin = bg2.getRanked()[0];
+
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 403, responseHeaders: HTML_HEADERS });
+    await flushSwitch();
+
+    const updates = bg2.getTabUpdateCalls();
+    assert.equal(updates.length, 1, "the navigation moves on to another instance");
+    assert.ok(!updates[0].url.startsWith(origin));
+    assert.equal(bg2.locallyBroken(origin, 0), true, "the next fresh redirect prefers an instance without a puzzle");
+    assert.equal(bg2.locallyBroken(origin, 6 * 60 * 1000), false, "but only briefly, unlike a real 403 failure");
+});
+
+test("a puzzle is left for the user to solve when no other instance is left", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => ["puzzle"] });
+    const tabId = 9502;
+    const origin = bg2.getRanked()[0];
+    const record = activeRecord(origin);
+    record.tried = [...bg2.getRanked()];
+
+    bg2.getActiveRedirects().set(tabId, record);
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 200, responseHeaders: HTML_HEADERS });
+    await flushSwitch();
+
+    assert.deepEqual(bg2.getTabUpdateCalls(), [], "no failure page in place of a puzzle the user can still solve");
+    assert.equal(bg2.getActiveRedirects().has(tabId), false);
+});
+
+test("a page that doesn't look like Nitter gets a short grace period before fallback", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => ["unknown"] });
+    const tabId = 9503;
+    const origin = bg2.getRanked()[0];
+
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 200, responseHeaders: HTML_HEADERS });
+    await flushSwitch();
+    assert.equal(bg2.getTabUpdateCalls().length, 0, "no fallback straight away");
+
+    await bg2.advance(UNKNOWN_GRACE);
+    await flushSwitch();
+    assert.equal(bg2.getTabUpdateCalls().length, 1, "fallback once the grace period is over and the page still isn't Nitter");
+});
+
+test("a bot check new to the extension that clears within the grace period is not skipped", async () => {
+    let verdict = "unknown";
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => [verdict] });
+    const tabId = 9504;
+    const origin = bg2.getRanked()[0];
+
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 200, responseHeaders: HTML_HEADERS });
+
+    // The check finishes and the page reloads as real Nitter.
+    verdict = false;
+    bg2.followListener({ type: "main_frame", tabId, requestId: "r2", url: origin + "/jack" });
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: "r2", statusCode: 200, responseHeaders: HTML_HEADERS });
+
+    await bg2.advance(bg2.NAV_STREAM_TIMEOUT_MS);
+    await flushSwitch();
+    assert.deepEqual(bg2.getTabUpdateCalls(), [], "the working page is kept");
+});
+
+test("a bot check served as HTTP 429 is waited out, not treated as a refusal", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => ["challenge"] });
+    const tabId = 9505;
+    const origin = bg2.getRanked()[0];
+
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 429, responseHeaders: HTML_HEADERS });
+    await bg2.advance(bg2.NAV_STREAM_TIMEOUT_MS);
+    await flushSwitch();
+
+    assert.deepEqual(bg2.getTabUpdateCalls(), [], "the tab is left on the bot check (nitter.catsarch.com sends Anubis as a 429)");
+});
+
+test("a plain HTML 429 is still a busy instance and falls back", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0 });
+    const tabId = 9506;
+    const origin = bg2.getRanked()[0];
+
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 429, responseHeaders: HTML_HEADERS });
+    await flushSwitch();
+
+    assert.equal(bg2.getTabUpdateCalls().length, 1);
+    assert.equal(bg2.locallyBroken(origin, 0), true);
+    assert.equal(bg2.locallyBroken(origin, 6 * 60 * 1000), false, "busy-grade, not the longer server demotion");
+});
+
+test("a puzzle on the instance the user chose to keep is left for them to solve", async () => {
+    const bg2 = load(undefined, undefined, undefined, { now: 0, executeScript: async () => ["puzzle"] });
+    const tabId = 9507;
+    const origin = bg2.getRanked()[0];
+
+    await bg2.sendMessage({ type: "setPreferred", origin });
+    bg2.getActiveRedirects().set(tabId, activeRecord(origin));
+    bg2.setTab(origin + "/jack", "complete");
+    await bg2.onCompleted({ type: "main_frame", tabId, url: origin + "/jack", requestId: undefined, statusCode: 200, responseHeaders: HTML_HEADERS });
+    await bg2.advance(bg2.NAV_STREAM_TIMEOUT_MS);
+    await flushSwitch();
+
+    assert.deepEqual(bg2.getTabUpdateCalls(), [], "the user picked this instance, so its puzzle is theirs to solve");
 });

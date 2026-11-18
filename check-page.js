@@ -5,9 +5,11 @@
 // which sends "default-src 'none'". A file-based content script isn't
 // subject to the page's CSP the same way an inline one is.
 //
-// Returns one of five values: false when the page is fine (a real page or a
+// Returns one of six values: false when the page is fine (a real page or a
 // "not found" result); "challenge" for an anti-bot interstitial that hasn't
-// resolved yet (Cloudflare, Anubis or go-away); "fail" for a confidently-identified instance failure (a named
+// resolved yet (Cloudflare, Anubis, go-away or Gandalf); "puzzle" for a bot
+// check that only a click can pass (dogcaptcha, "Quick check"); "fail" for a
+// confidently-identified instance failure (a named
 // rate-limit/auth phrase, in content or Nitter's own error panel);
 // "unsupported" when the instance renders its own notice that the requested
 // feature (e.g. search) is disabled there; "unknown" when the page merely
@@ -17,7 +19,9 @@
 // a real Nitter template change would otherwise get every instance judged
 // broken at once, and an instance with search disabled still serves profiles
 // and tweets. "challenge" never triggers fallback: the tab is left alone so
-// the user can complete it.
+// the user can complete it. "puzzle" moves on when another instance is left
+// and the user hasn't chosen to keep this one, since a working instance beats
+// solving a picture test.
 (() => {
     // "rate limit" (no "-ed") also matches "rate limit exceeded" and "rate
     // limiting", wordings "rate limited" alone missed. The gates below
@@ -58,15 +62,26 @@
     //    then reload the real page, so switching away mid-solve skips a working
     //    instance and never lets the browser earn the pass cookie. Anubis ships
     //    its parameters in script#anubis_challenge; go-away serves its assets
-    //    and its meta-refresh from its own /go-away/cmd/go-away/ path.
+    //    and its meta-refresh from its own /go-away/cmd/go-away/ path. Gandalf
+    //    (nitter.netbub.com since 2026-11) serves everything from /.gandalf/
+    //    and passes on its own a couple of seconds later.
     if (
         document.querySelector('script[src*="/cdn-cgi/challenge-platform"]') ||
         document.querySelector("#challenge-form") ||
         document.querySelector("script#anubis_challenge") ||
         document.querySelector('[href*="/go-away/cmd/go-away/"], [src*="/go-away/cmd/go-away/"]') ||
+        document.querySelector('[href^="/.gandalf/"], [action^="/.gandalf/"]') ||
         (!looksLikeNitter && (document.title || "").toLowerCase().includes("just a moment"))
     ) {
         return "challenge";
+    }
+
+    // 1b. A bot check that never passes on its own: dogcaptcha's picture grid
+    //     (shitter.thepixora.com) and the nine-button "Quick check" served
+    //     from /__shield/ as HTTP 403 (nitter.jaydenha.uk), both seen live
+    //     2026-11-18.
+    if (document.querySelector('[href^="/dogcaptcha/"], [action^="/__shield/"], [href^="/__shield/"]')) {
+        return "puzzle";
     }
 
     // 2. Only an HTML document can be a Nitter page. RSS, JSON and plain-text
